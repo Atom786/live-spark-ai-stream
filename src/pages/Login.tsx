@@ -1,11 +1,11 @@
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Video, Eye, EyeOff } from 'lucide-react';
+import { Video, Eye, EyeOff, AlertCircle } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/hooks/use-toast';
 
@@ -15,28 +15,74 @@ const Login = () => {
   const [password, setPassword] = useState('');
   const [channelName, setChannelName] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const { login, signup, isLoading } = useAuth();
+  const [errors, setErrors] = useState<{ [key: string]: string }>({});
+  const { login, signup, isLoading, user } = useAuth();
   const { toast } = useToast();
   const navigate = useNavigate();
+
+  // Redirect if user is already logged in
+  useEffect(() => {
+    if (user) {
+      navigate('/dashboard');
+    }
+  }, [user, navigate]);
+
+  const validateForm = () => {
+    const newErrors: { [key: string]: string } = {};
+
+    if (!email) {
+      newErrors.email = 'Email is required';
+    } else if (!/\S+@\S+\.\S+/.test(email)) {
+      newErrors.email = 'Please enter a valid email';
+    }
+
+    if (!password) {
+      newErrors.password = 'Password is required';
+    } else if (password.length < 6) {
+      newErrors.password = 'Password must be at least 6 characters';
+    }
+
+    if (isSignup && !channelName) {
+      newErrors.channelName = 'Channel name is required';
+    }
+
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
+    if (!validateForm()) {
+      return;
+    }
+
+    setErrors({});
+    
     try {
-      let success = false;
+      let result;
       
       if (isSignup) {
-        success = await signup(email, password, channelName);
+        result = await signup(email, password, channelName);
       } else {
-        success = await login(email, password);
+        result = await login(email, password);
       }
       
-      if (success) {
+      if (result.success) {
         toast({
           title: "Success!",
-          description: isSignup ? "Account created successfully" : "Welcome back!",
+          description: isSignup ? "Account created successfully! Please check your email to verify your account." : "Welcome back!",
         });
-        navigate('/dashboard');
+        
+        if (!isSignup) {
+          navigate('/dashboard');
+        }
+      } else {
+        toast({
+          title: "Error",
+          description: result.error || "Something went wrong. Please try again.",
+          variant: "destructive",
+        });
       }
     } catch (error) {
       toast({
@@ -80,8 +126,16 @@ const Login = () => {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   required
-                  className="bg-white/10 border-white/20 text-white placeholder:text-gray-400"
+                  className={`bg-white/10 border-white/20 text-white placeholder:text-gray-400 ${
+                    errors.email ? 'border-red-500' : ''
+                  }`}
                 />
+                {errors.email && (
+                  <div className="flex items-center space-x-1 text-red-400 text-sm">
+                    <AlertCircle className="h-4 w-4" />
+                    <span>{errors.email}</span>
+                  </div>
+                )}
               </div>
 
               {isSignup && (
@@ -94,8 +148,16 @@ const Login = () => {
                     value={channelName}
                     onChange={(e) => setChannelName(e.target.value)}
                     required
-                    className="bg-white/10 border-white/20 text-white placeholder:text-gray-400"
+                    className={`bg-white/10 border-white/20 text-white placeholder:text-gray-400 ${
+                      errors.channelName ? 'border-red-500' : ''
+                    }`}
                   />
+                  {errors.channelName && (
+                    <div className="flex items-center space-x-1 text-red-400 text-sm">
+                      <AlertCircle className="h-4 w-4" />
+                      <span>{errors.channelName}</span>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -109,7 +171,9 @@ const Login = () => {
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     required
-                    className="bg-white/10 border-white/20 text-white placeholder:text-gray-400 pr-10"
+                    className={`bg-white/10 border-white/20 text-white placeholder:text-gray-400 pr-10 ${
+                      errors.password ? 'border-red-500' : ''
+                    }`}
                   />
                   <button
                     type="button"
@@ -119,6 +183,12 @@ const Login = () => {
                     {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   </button>
                 </div>
+                {errors.password && (
+                  <div className="flex items-center space-x-1 text-red-400 text-sm">
+                    <AlertCircle className="h-4 w-4" />
+                    <span>{errors.password}</span>
+                  </div>
+                )}
               </div>
 
               <Button 
@@ -134,7 +204,13 @@ const Login = () => {
               <p className="text-gray-300">
                 {isSignup ? 'Already have a channel?' : "Don't have a channel?"}{' '}
                 <button
-                  onClick={() => setIsSignup(!isSignup)}
+                  onClick={() => {
+                    setIsSignup(!isSignup);
+                    setErrors({});
+                    setEmail('');
+                    setPassword('');
+                    setChannelName('');
+                  }}
                   className="text-purple-400 hover:text-purple-300 font-semibold"
                 >
                   {isSignup ? 'Sign in' : 'Create one'}
