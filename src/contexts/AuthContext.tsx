@@ -1,15 +1,16 @@
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { User, Session } from '@supabase/supabase-js';
+import { supabase } from '@/integrations/supabase/client';
 
-interface User {
-  id: string;
-  email: string;
-  channelName: string;
-  isLive: boolean;
+interface AuthUser extends User {
+  channelName?: string;
+  isLive?: boolean;
 }
 
 interface AuthContextType {
-  user: User | null;
+  user: AuthUser | null;
+  session: Session | null;
   login: (email: string, password: string) => Promise<boolean>;
   signup: (email: string, password: string, channelName: string) => Promise<boolean>;
   logout: () => void;
@@ -27,63 +28,121 @@ export const useAuth = () => {
 };
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [session, setSession] = useState<Session | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    // Check for stored user session
-    const storedUser = localStorage.getItem('streamUser');
-    if (storedUser) {
-      setUser(JSON.parse(storedUser));
-    }
-    setIsLoading(false);
+    // Set up auth state listener
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      async (event, session) => {
+        setSession(session);
+        
+        if (session?.user) {
+          // Fetch user profile to get channel info
+          const { data: profile } = await supabase
+            .from('profiles')
+            .select('channel_name')
+            .eq('id', session.user.id)
+            .single();
+            
+          // Check if user has a live stream
+          const { data: channels } = await supabase
+            .from('channels')
+            .select('is_live')
+            .eq('user_id', session.user.id)
+            .single();
+            
+          const authUser: AuthUser = {
+            ...session.user,
+            channelName: profile?.channel_name || `${session.user.email?.split('@')[0]}'s Channel`,
+            isLive: channels?.is_live || false
+          };
+          
+          setUser(authUser);
+        } else {
+          setUser(null);
+        }
+        setIsLoading(false);
+      }
+    );
+
+    // Check for existing session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session) {
+        // Trigger the auth state change handler
+        return;
+      }
+      setIsLoading(false);
+    });
+
+    return () => subscription.unsubscribe();
   }, []);
 
   const login = async (email: string, password: string): Promise<boolean> => {
     setIsLoading(true);
     
-    // Simulate API call - replace with real authentication
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    const userData = {
-      id: Date.now().toString(),
-      email,
-      channelName: `${email.split('@')[0]}'s Channel`,
-      isLive: false
-    };
-    
-    setUser(userData);
-    localStorage.setItem('streamUser', JSON.stringify(userData));
-    setIsLoading(false);
-    return true;
+    try {
+      const { error } = await supabase.auth.signInWithPassword({
+        email,
+        password
+      });
+      
+      if (error) {
+        console.error('Login error:', error);
+        setIsLoading(false);
+        return false;
+      }
+      
+      return true;
+    } catch (error) {
+      console.error('Login error:', error);
+      setIsLoading(false);
+      return false;
+    }
   };
 
   const signup = async (email: string, password: string, channelName: string): Promise<boolean> => {
     setIsLoading(true);
     
-    // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    const userData = {
-      id: Date.now().toString(),
-      email,
-      channelName,
-      isLive: false
-    };
-    
-    setUser(userData);
-    localStorage.setItem('streamUser', JSON.stringify(userData));
-    setIsLoading(false);
-    return true;
+    try {
+      const redirectUrl = `${window.location.origin}/`;
+      
+      const { error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          emailRedirectTo: redirectUrl,
+          data: {
+            channel_name: channelName
+          }
+        }
+      });
+      
+      if (error) {
+        console.error('Signup error:', error);
+        setIsLoading(false);
+        return false;
+      }
+      
+      return true;
+    } catch (error) {
+      console.error('Signup error:', error);
+      setIsLoading(false);
+      return false;
+    }
   };
 
-  const logout = () => {
-    setUser(null);
-    localStorage.removeItem('streamUser');
+  const logout = async () => {
+    try {
+      await supabase.auth.signOut();
+    } catch (error) {
+      console.error('Logout error:', error);
+    }
   };
 
   return (
-    <AuthContext.Provider value={{ user, login, signup, logout, isLoading }}>
+    <AuthContext.Provider value={{ user, session, login, signup, logout, isLoading }}>
       {children}
     </AuthContext.Provider>
   );

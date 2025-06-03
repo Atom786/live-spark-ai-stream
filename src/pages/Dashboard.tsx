@@ -6,28 +6,71 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { Video, Users, Eye, Clock, Settings, LogOut, Radio } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
+import { supabase } from '@/integrations/supabase/client';
 
 const Dashboard = () => {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
-  const [stats] = useState({
-    totalViews: 12543,
-    totalStreams: 28,
-    avgViewTime: '23 min',
-    lastStream: '2 hours ago'
+  const [stats, setStats] = useState({
+    totalViews: 0,
+    totalStreams: 0,
+    avgViewTime: '0 min',
+    lastStream: 'Never'
   });
 
-  const [recentStreams] = useState([
-    { id: '1', title: 'Cooking with AI', views: 234, duration: '45 min', date: '2 hours ago' },
-    { id: '2', title: 'Tech Review Live', views: 567, duration: '32 min', date: '1 day ago' },
-    { id: '3', title: 'Gaming Session', views: 123, duration: '1h 20min', date: '3 days ago' },
-  ]);
+  const [recentStreams, setRecentStreams] = useState<any[]>([]);
+  const [channelId, setChannelId] = useState<string>('');
 
   useEffect(() => {
     if (!user) {
       navigate('/login');
+      return;
     }
+
+    fetchDashboardData();
   }, [user, navigate]);
+
+  const fetchDashboardData = async () => {
+    if (!user) return;
+
+    try {
+      // Get user's channel
+      const { data: channel } = await supabase
+        .from('channels')
+        .select('id')
+        .eq('user_id', user.id)
+        .single();
+
+      if (channel) {
+        setChannelId(channel.id);
+
+        // Get recent streams
+        const { data: streams } = await supabase
+          .from('streams')
+          .select('*')
+          .eq('channel_id', channel.id)
+          .order('created_at', { ascending: false })
+          .limit(3);
+
+        if (streams) {
+          setRecentStreams(streams);
+          
+          // Calculate stats
+          const totalStreams = streams.length;
+          const totalViews = streams.reduce((sum, stream) => sum + (stream.viewer_count || 0), 0);
+          
+          setStats({
+            totalViews,
+            totalStreams,
+            avgViewTime: '23 min', // Mock data for now
+            lastStream: streams.length > 0 ? 'Recently' : 'Never'
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching dashboard data:', error);
+    }
+  };
 
   if (!user) return null;
 
@@ -70,7 +113,7 @@ const Dashboard = () => {
             <p className="text-gray-300">Manage your streams and view analytics</p>
           </div>
           <div className="flex space-x-4 mt-4 md:mt-0">
-            <Link to={`/stream/${user.id}`}>
+            <Link to={`/stream/${channelId}`}>
               <Button className="bg-red-600 hover:bg-red-700 text-white">
                 <Radio className="h-4 w-4 mr-2" />
                 Go Live
@@ -142,7 +185,7 @@ const Dashboard = () => {
           <CardContent>
             <div className="flex items-center space-x-4">
               <div className="text-sm text-gray-300">
-                <span className="font-semibold">Channel URL:</span> streamai.app/watch/{user.id}
+                <span className="font-semibold">Channel URL:</span> streamai.app/watch/{channelId}
               </div>
             </div>
           </CardContent>
@@ -158,26 +201,37 @@ const Dashboard = () => {
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
-              {recentStreams.map((stream) => (
-                <div
-                  key={stream.id}
-                  className="flex items-center justify-between p-4 bg-white/5 rounded-lg border border-white/10"
-                >
-                  <div className="flex items-center space-x-4">
-                    <div className="w-12 h-12 bg-purple-600 rounded-lg flex items-center justify-center">
-                      <Video className="h-6 w-6 text-white" />
+              {recentStreams.length > 0 ? (
+                recentStreams.map((stream) => (
+                  <div
+                    key={stream.id}
+                    className="flex items-center justify-between p-4 bg-white/5 rounded-lg border border-white/10"
+                  >
+                    <div className="flex items-center space-x-4">
+                      <div className="w-12 h-12 bg-purple-600 rounded-lg flex items-center justify-center">
+                        <Video className="h-6 w-6 text-white" />
+                      </div>
+                      <div>
+                        <h3 className="text-white font-semibold">{stream.title}</h3>
+                        <p className="text-gray-400 text-sm">
+                          {new Date(stream.created_at).toLocaleDateString()}
+                        </p>
+                      </div>
                     </div>
-                    <div>
-                      <h3 className="text-white font-semibold">{stream.title}</h3>
-                      <p className="text-gray-400 text-sm">{stream.date}</p>
+                    <div className="text-right">
+                      <p className="text-white font-semibold">{stream.viewer_count} views</p>
+                      <p className="text-gray-400 text-sm">
+                        {stream.ended_at ? 'Ended' : stream.is_live ? 'Live' : 'Offline'}
+                      </p>
                     </div>
                   </div>
-                  <div className="text-right">
-                    <p className="text-white font-semibold">{stream.views} views</p>
-                    <p className="text-gray-400 text-sm">{stream.duration}</p>
-                  </div>
+                ))
+              ) : (
+                <div className="text-center py-8 text-gray-400">
+                  <Video className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                  <p>No streams yet. Start your first stream!</p>
                 </div>
-              ))}
+              )}
             </div>
           </CardContent>
         </Card>
