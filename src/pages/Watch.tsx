@@ -1,4 +1,3 @@
-
 import { useState, useRef, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
@@ -6,13 +5,19 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Video, Users, MessageSquare, ThumbsUp } from 'lucide-react';
+import { Video, Users, MessageSquare, ThumbsUp, AlertCircle } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
+import { supabase } from '@/integrations/supabase/client';
 
 const Watch = () => {
   const { channelId } = useParams();
-  const [isLive, setIsLive] = useState(true);
-  const [viewerCount, setViewerCount] = useState(Math.floor(Math.random() * 50) + 10);
+  const navigate = useNavigate();
+  const { toast } = useToast();
+  
+  const [isLoading, setIsLoading] = useState(true);
+  const [channelExists, setChannelExists] = useState(false);
+  const [isLive, setIsLive] = useState(false);
+  const [viewerCount, setViewerCount] = useState(0);
   const [showRegistration, setShowRegistration] = useState(true);
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
@@ -21,81 +26,132 @@ const Watch = () => {
   const [messages, setMessages] = useState<{ id: string; name: string; text: string }[]>([]);
   const videoRef = useRef<HTMLVideoElement>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null);
-  const { toast } = useToast();
-  const navigate = useNavigate();
-  const [channelData] = useState({
-    name: 'Tech Talks with Sarah',
-    description: 'Discussing the latest in AI and technology',
+  
+  const [channelData, setChannelData] = useState({
+    name: 'Loading...',
+    description: 'Loading channel information...',
   });
 
-  const [transcript, setTranscript] = useState('Welcome to my live stream! Today we are talking about AI-powered features.');
+  const [transcript, setTranscript] = useState('Welcome to the live stream!');
   const [currentMood, setCurrentMood] = useState('Happy');
 
   useEffect(() => {
-    // Auto-scroll chat to bottom on new messages
+    const fetchChannelData = async () => {
+      if (!channelId) {
+        setIsLoading(false);
+        setChannelExists(false);
+        return;
+      }
+
+      try {
+        console.log('Fetching channel data for ID:', channelId);
+        
+        // Check if channel exists
+        const { data: channel, error: channelError } = await supabase
+          .from('channels')
+          .select('*')
+          .eq('id', channelId)
+          .single();
+
+        if (channelError || !channel) {
+          console.error('Channel not found:', channelError);
+          setChannelExists(false);
+          setIsLoading(false);
+          return;
+        }
+
+        setChannelExists(true);
+        setChannelData({
+          name: channel.name,
+          description: channel.description || 'Live streaming channel',
+        });
+        setIsLive(channel.is_live);
+
+        // Get current viewer count for this channel's live stream
+        if (channel.is_live) {
+          const { data: streams } = await supabase
+            .from('streams')
+            .select('id, viewer_count')
+            .eq('channel_id', channelId)
+            .eq('is_live', true)
+            .order('created_at', { ascending: false })
+            .limit(1);
+
+          if (streams && streams.length > 0) {
+            setViewerCount(streams[0].viewer_count || 0);
+          }
+        }
+
+        setIsLoading(false);
+      } catch (error) {
+        console.error('Error fetching channel data:', error);
+        setChannelExists(false);
+        setIsLoading(false);
+      }
+    };
+
+    fetchChannelData();
+  }, [channelId]);
+
+  useEffect(() => {
     if (chatContainerRef.current) {
       chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
     }
   }, [messages]);
 
   useEffect(() => {
-    // Simulate transcript updates
-    const transcriptMessages = [
-      "Let me show you how this AI mood detection works.",
-      "It uses computer vision to analyze facial expressions.",
-      "The speech recognition is another amazing feature we're using.",
-      "Everything gets processed in real-time right in your browser.",
-      "No servers needed for these AI features!",
-      "What do you all think about these features?",
-    ];
-    
-    let index = 0;
-    const transcriptInterval = setInterval(() => {
-      if (!showRegistration) {
+    if (!showRegistration && channelExists) {
+      const transcriptMessages = [
+        "Let me show you how this AI mood detection works.",
+        "It uses computer vision to analyze facial expressions.",
+        "The speech recognition is another amazing feature we're using.",
+        "Everything gets processed in real-time right in your browser.",
+        "No servers needed for these AI features!",
+        "What do you all think about these features?",
+      ];
+      
+      let index = 0;
+      const transcriptInterval = setInterval(() => {
         setTranscript(transcriptMessages[index % transcriptMessages.length]);
         index++;
-      }
-    }, 5000);
-    
-    // Simulate mood changes
-    const moods = ['Happy', 'Neutral', 'Happy', 'Surprised', 'Neutral'];
-    let moodIndex = 0;
-    const moodInterval = setInterval(() => {
-      if (!showRegistration) {
+      }, 5000);
+      
+      const moods = ['Happy', 'Neutral', 'Happy', 'Surprised', 'Neutral'];
+      let moodIndex = 0;
+      const moodInterval = setInterval(() => {
         setCurrentMood(moods[moodIndex % moods.length]);
         moodIndex++;
-      }
-    }, 8000);
-    
-    // Simulate other viewers' chat messages
-    const presetMessages = [
-      { name: 'John', text: "This is amazing technology!" },
-      { name: 'Emma', text: "How long did it take you to build this?" },
-      { name: 'Alex', text: "The captions are working really well" },
-      { name: 'Sophia', text: "Are you using TensorFlow.js for the mood detection?" },
-      { name: 'Michael', text: "Can you explain how the WebRTC setup works?" },
-    ];
-    
-    let msgIndex = 0;
-    const chatInterval = setInterval(() => {
-      if (!showRegistration && Math.random() > 0.3) {
-        const msg = presetMessages[msgIndex % presetMessages.length];
-        setMessages(prev => [
-          ...prev, 
-          { id: Date.now().toString(), name: msg.name, text: msg.text }
-        ]);
-        msgIndex++;
-      }
-    }, 7000);
-    
-    return () => {
-      clearInterval(transcriptInterval);
-      clearInterval(moodInterval);
-      clearInterval(chatInterval);
-    };
-  }, [showRegistration]);
+      }, 8000);
+      
+      const presetMessages = [
+        { name: 'John', text: "This is amazing technology!" },
+        { name: 'Emma', text: "How long did it take you to build this?" },
+        { name: 'Alex', text: "The captions are working really well" },
+        { name: 'Sophia', text: "Are you using TensorFlow.js for the mood detection?" },
+        { name: 'Michael', text: "Can you explain how the WebRTC setup works?" },
+      ];
+      
+      let msgIndex = 0;
+      const chatInterval = setInterval(() => {
+        if (Math.random() > 0.3) {
+          const msg = presetMessages[msgIndex % presetMessages.length];
+          setMessages(prev => [
+            ...prev, 
+            { id: Date.now().toString(), name: msg.name, text: msg.text }
+          ]);
+          msgIndex++;
+        }
+      }, 7000);
+      
+      return () => {
+        clearInterval(transcriptInterval);
+        clearInterval(moodInterval);
+        clearInterval(chatInterval);
+      };
+    }
+  }, [showRegistration, channelExists]);
 
-  const handleSubmitRegistration = (e: React.FormEvent) => {
+  const handleSubmitRegistration = async (e: React.FormEvent) => {
     e.preventDefault();
     
     if (!firstName || !lastName || !email) {
@@ -115,6 +171,31 @@ const Watch = () => {
       });
       return;
     }
+
+    // Register viewer in database if channel exists
+    if (channelExists && channelId) {
+      try {
+        const { data: streams } = await supabase
+          .from('streams')
+          .select('id')
+          .eq('channel_id', channelId)
+          .eq('is_live', true)
+          .limit(1);
+
+        if (streams && streams.length > 0) {
+          await supabase
+            .from('viewers')
+            .insert({
+              stream_id: streams[0].id,
+              first_name: firstName,
+              last_name: lastName,
+              email: email,
+            });
+        }
+      } catch (error) {
+        console.error('Error registering viewer:', error);
+      }
+    }
     
     toast({
       title: "Success!",
@@ -124,22 +205,72 @@ const Watch = () => {
     setShowRegistration(false);
   };
 
-  const handleSendMessage = (e: React.FormEvent) => {
+  const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     
     if (!chatMessage.trim()) return;
+
+    const newMessage = {
+      id: Date.now().toString(),
+      name: firstName,
+      text: chatMessage,
+    };
     
-    setMessages([
-      ...messages,
-      {
-        id: Date.now().toString(),
-        name: `${firstName}`,
-        text: chatMessage,
+    setMessages([...messages, newMessage]);
+
+    // Save message to database if channel exists
+    if (channelExists && channelId) {
+      try {
+        const { data: streams } = await supabase
+          .from('streams')
+          .select('id')
+          .eq('channel_id', channelId)
+          .eq('is_live', true)
+          .limit(1);
+
+        if (streams && streams.length > 0) {
+          await supabase
+            .from('chat_messages')
+            .insert({
+              stream_id: streams[0].id,
+              message: chatMessage,
+            });
+        }
+      } catch (error) {
+        console.error('Error saving chat message:', error);
       }
-    ]);
+    }
     
     setChatMessage('');
   };
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-gray-900 via-purple-900 to-violet-900 flex items-center justify-center">
+        <div className="text-white text-xl">Loading channel...</div>
+      </div>
+    );
+  }
+
+  if (!channelExists) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-gray-900 via-purple-900 to-violet-900 flex items-center justify-center">
+        <div className="text-center text-white max-w-md mx-auto p-6">
+          <AlertCircle className="h-16 w-16 mx-auto mb-4 text-red-400" />
+          <h1 className="text-2xl font-bold mb-2">Channel Not Found</h1>
+          <p className="text-gray-300 mb-6">
+            The channel you're looking for doesn't exist or may have been removed.
+          </p>
+          <Button
+            onClick={() => navigate('/')}
+            className="bg-purple-600 hover:bg-purple-700"
+          >
+            Go Back Home
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-900 via-purple-900 to-violet-900">
@@ -209,10 +340,11 @@ const Watch = () => {
             <div className="relative">
               {/* Video stream */}
               <div className="w-full rounded-lg bg-black aspect-video relative">
-                {/* Using color background with camera icon as placeholder for stream */}
                 <div className="absolute inset-0 flex items-center justify-center flex-col">
                   <Video className="h-16 w-16 text-gray-600" />
-                  <p className="text-gray-400 mt-2">Live stream placeholder</p>
+                  <p className="text-gray-400 mt-2">
+                    {isLive ? 'Live stream placeholder' : 'Stream is offline'}
+                  </p>
                 </div>
                 
                 {/* Live badge */}
@@ -234,16 +366,20 @@ const Watch = () => {
                 </div>
 
                 {/* Mood indicator */}
-                <div className="absolute top-16 right-4">
-                  <div className="bg-black/50 backdrop-blur-sm text-white px-2 py-1 rounded-md">
-                    Mood: {currentMood === 'Happy' ? '😊' : currentMood === 'Sad' ? '😔' : '😐'} {currentMood}
+                {isLive && (
+                  <div className="absolute top-16 right-4">
+                    <div className="bg-black/50 backdrop-blur-sm text-white px-2 py-1 rounded-md">
+                      Mood: {currentMood === 'Happy' ? '😊' : currentMood === 'Sad' ? '😔' : '😐'} {currentMood}
+                    </div>
                   </div>
-                </div>
+                )}
                 
                 {/* Live captions */}
-                <div className="absolute bottom-8 left-0 right-0 mx-auto w-4/5 bg-black/60 backdrop-blur-sm rounded-lg p-3 text-white text-center">
-                  {transcript}
-                </div>
+                {isLive && (
+                  <div className="absolute bottom-8 left-0 right-0 mx-auto w-4/5 bg-black/60 backdrop-blur-sm rounded-lg p-3 text-white text-center">
+                    {transcript}
+                  </div>
+                )}
               </div>
             </div>
             
@@ -277,7 +413,11 @@ const Watch = () => {
               <CardContent className="space-y-2">
                 <div className="flex justify-between">
                   <span className="text-gray-300">Status:</span>
-                  <div className="bg-red-600 text-white px-2 py-0.5 rounded text-xs">LIVE</div>
+                  <div className={`px-2 py-0.5 rounded text-xs ${
+                    isLive ? 'bg-red-600 text-white' : 'bg-gray-600 text-gray-300'
+                  }`}>
+                    {isLive ? 'LIVE' : 'OFFLINE'}
+                  </div>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-300">Viewers:</span>
@@ -285,7 +425,7 @@ const Watch = () => {
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-300">Started:</span>
-                  <span className="text-white">12 minutes ago</span>
+                  <span className="text-white">{isLive ? '12 minutes ago' : 'Not streaming'}</span>
                 </div>
               </CardContent>
             </Card>
@@ -331,12 +471,12 @@ const Watch = () => {
                     placeholder="Type a message..."
                     value={chatMessage}
                     onChange={e => setChatMessage(e.target.value)}
-                    disabled={showRegistration}
+                    disabled={showRegistration || !isLive}
                     className="flex-1 rounded-l-md py-2 px-3 bg-white/10 border-r-0 border border-white/10 text-white placeholder:text-gray-500 focus:outline-none"
                   />
                   <Button 
                     type="submit" 
-                    disabled={showRegistration}
+                    disabled={showRegistration || !isLive}
                     className="rounded-l-none bg-purple-600 hover:bg-purple-700"
                   >
                     Send
