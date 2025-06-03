@@ -34,42 +34,70 @@ const Watch = () => {
 
   const [transcript, setTranscript] = useState('Welcome to the live stream!');
   const [currentMood, setCurrentMood] = useState('Happy');
+  const [errorMessage, setErrorMessage] = useState('');
+
+  // Helper function to validate UUID format
+  const isValidUUID = (str: string) => {
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    return uuidRegex.test(str);
+  };
 
   useEffect(() => {
     const fetchChannelData = async () => {
       if (!channelId) {
+        console.log('No channel ID provided');
         setIsLoading(false);
         setChannelExists(false);
+        setErrorMessage('No channel ID provided in the URL');
+        return;
+      }
+
+      console.log('Fetching channel data for ID:', channelId);
+
+      // First validate if the channelId is a valid UUID format
+      if (!isValidUUID(channelId)) {
+        console.error('Invalid UUID format for channel ID:', channelId);
+        setChannelExists(false);
+        setIsLoading(false);
+        setErrorMessage('Invalid channel ID format. Channel ID must be a valid UUID.');
         return;
       }
 
       try {
-        console.log('Fetching channel data for ID:', channelId);
-        
-        // Check if channel exists
+        // Check if channel exists using the correct UUID
         const { data: channel, error: channelError } = await supabase
           .from('channels')
           .select('*')
           .eq('id', channelId)
-          .single();
+          .maybeSingle(); // Use maybeSingle instead of single to avoid errors when no data
 
-        if (channelError || !channel) {
-          console.error('Channel not found:', channelError);
+        if (channelError) {
+          console.error('Database error fetching channel:', channelError);
           setChannelExists(false);
           setIsLoading(false);
+          setErrorMessage(`Database error: ${channelError.message}`);
           return;
         }
 
+        if (!channel) {
+          console.log('Channel not found in database');
+          setChannelExists(false);
+          setIsLoading(false);
+          setErrorMessage('Channel not found in our database');
+          return;
+        }
+
+        console.log('Channel found:', channel);
         setChannelExists(true);
         setChannelData({
-          name: channel.name,
+          name: channel.name || 'Unnamed Channel',
           description: channel.description || 'Live streaming channel',
         });
-        setIsLive(channel.is_live);
+        setIsLive(channel.is_live || false);
 
         // Get current viewer count for this channel's live stream
         if (channel.is_live) {
-          const { data: streams } = await supabase
+          const { data: streams, error: streamsError } = await supabase
             .from('streams')
             .select('id, viewer_count')
             .eq('channel_id', channelId)
@@ -77,16 +105,19 @@ const Watch = () => {
             .order('created_at', { ascending: false })
             .limit(1);
 
-          if (streams && streams.length > 0) {
+          if (streamsError) {
+            console.error('Error fetching streams:', streamsError);
+          } else if (streams && streams.length > 0) {
             setViewerCount(streams[0].viewer_count || 0);
           }
         }
 
         setIsLoading(false);
       } catch (error) {
-        console.error('Error fetching channel data:', error);
+        console.error('Unexpected error fetching channel data:', error);
         setChannelExists(false);
         setIsLoading(false);
+        setErrorMessage('An unexpected error occurred while loading the channel');
       }
     };
 
@@ -258,9 +289,17 @@ const Watch = () => {
         <div className="text-center text-white max-w-md mx-auto p-6">
           <AlertCircle className="h-16 w-16 mx-auto mb-4 text-red-400" />
           <h1 className="text-2xl font-bold mb-2">Channel Not Found</h1>
-          <p className="text-gray-300 mb-6">
-            The channel you're looking for doesn't exist or may have been removed.
+          <p className="text-gray-300 mb-4">
+            {errorMessage || "The channel you're looking for doesn't exist or may have been removed."}
           </p>
+          <div className="bg-gray-800/50 p-3 rounded-lg mb-4 text-sm text-left">
+            <p className="text-gray-400">Channel ID: <span className="text-white font-mono">{channelId}</span></p>
+            {channelId && !isValidUUID(channelId) && (
+              <p className="text-red-400 mt-2">
+                ⚠️ Invalid UUID format. Channel IDs must be valid UUIDs.
+              </p>
+            )}
+          </div>
           <Button
             onClick={() => navigate('/')}
             className="bg-purple-600 hover:bg-purple-700"
