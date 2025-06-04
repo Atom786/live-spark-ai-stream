@@ -1,3 +1,4 @@
+
 import { useState, useRef, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
@@ -24,8 +25,10 @@ const Stream = () => {
   const [mood, setMood] = useState<string>('Neutral');
   const [transcript, setTranscript] = useState<string>('');
   const [currentStreamId, setCurrentStreamId] = useState<string | null>(null);
+  const [mediaStream, setMediaStream] = useState<MediaStream | null>(null);
   const streamTimer = useRef<NodeJS.Timeout>();
   const viewerCountTimer = useRef<NodeJS.Timeout>();
+  const realtimeChannel = useRef<any>(null);
 
   useEffect(() => {
     if (!user) {
@@ -41,6 +44,44 @@ const Stream = () => {
     };
   }, [user, navigate]);
 
+  // Set up real-time communication for stream data
+  useEffect(() => {
+    if (isStreaming && currentStreamId) {
+      realtimeChannel.current = supabase
+        .channel(`stream_${currentStreamId}`)
+        .on('broadcast', { event: 'stream_data' }, (payload) => {
+          // Handle real-time stream data if needed
+          console.log('Stream data received:', payload);
+        })
+        .subscribe();
+
+      // Broadcast stream data every 2 seconds
+      const interval = setInterval(() => {
+        if (mediaStream && realtimeChannel.current) {
+          // In a real implementation, you'd send video/audio data chunks
+          // For now, we'll broadcast that the stream is active
+          realtimeChannel.current.send({
+            type: 'broadcast',
+            event: 'stream_data',
+            payload: {
+              isLive: true,
+              hasVideo: isVideoEnabled,
+              hasAudio: isAudioEnabled,
+              timestamp: Date.now()
+            }
+          });
+        }
+      }, 2000);
+
+      return () => {
+        clearInterval(interval);
+        if (realtimeChannel.current) {
+          supabase.removeChannel(realtimeChannel.current);
+        }
+      };
+    }
+  }, [isStreaming, currentStreamId, isVideoEnabled, isAudioEnabled, mediaStream]);
+
   const initializeCamera = async () => {
     try {
       console.log('Initializing camera...');
@@ -48,6 +89,8 @@ const Stream = () => {
         video: { width: 1280, height: 720 },
         audio: true
       });
+      
+      setMediaStream(stream);
       
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
@@ -71,9 +114,11 @@ const Stream = () => {
   };
 
   const cleanup = () => {
-    if (videoRef.current && videoRef.current.srcObject) {
-      const stream = videoRef.current.srcObject as MediaStream;
-      stream.getTracks().forEach(track => track.stop());
+    if (mediaStream) {
+      mediaStream.getTracks().forEach(track => track.stop());
+      setMediaStream(null);
+    }
+    if (videoRef.current) {
       videoRef.current.srcObject = null;
     }
     if (streamTimer.current) {
@@ -81,6 +126,9 @@ const Stream = () => {
     }
     if (viewerCountTimer.current) {
       clearInterval(viewerCountTimer.current);
+    }
+    if (realtimeChannel.current) {
+      supabase.removeChannel(realtimeChannel.current);
     }
   };
 
@@ -95,6 +143,10 @@ const Stream = () => {
   const startStream = async () => {
     try {
       console.log('Starting stream...');
+      
+      if (!mediaStream) {
+        await initializeCamera();
+      }
       
       // Create a new stream record in the database
       const { data: streamData, error: streamError } = await supabase
@@ -125,6 +177,16 @@ const Stream = () => {
         .update({ is_live: true })
         .eq('id', channelId);
 
+      // Store stream info in localStorage for viewer access
+      const streamInfo = {
+        streamId: streamData.id,
+        channelId: channelId,
+        streamerName: user?.channelName,
+        isLive: true,
+        startedAt: new Date().toISOString()
+      };
+      localStorage.setItem(`stream_${channelId}`, JSON.stringify(streamInfo));
+
       setCurrentStreamId(streamData.id);
       setIsStreaming(true);
       setStreamDuration(0);
@@ -144,11 +206,11 @@ const Stream = () => {
 
       // Update viewer count every 5 seconds
       viewerCountTimer.current = setInterval(async () => {
-        if (currentStreamId) {
+        if (streamData.id) {
           const { data: viewers } = await supabase
             .from('viewers')
             .select('id')
-            .eq('stream_id', currentStreamId)
+            .eq('stream_id', streamData.id)
             .is('left_at', null);
           
           const count = viewers?.length || 0;
@@ -158,7 +220,7 @@ const Stream = () => {
           await supabase
             .from('streams')
             .update({ viewer_count: count })
-            .eq('id', currentStreamId);
+            .eq('id', streamData.id);
         }
       }, 5000);
       
@@ -192,6 +254,9 @@ const Stream = () => {
           .update({ left_at: new Date().toISOString() })
           .eq('stream_id', currentStreamId)
           .is('left_at', null);
+
+        // Clear stream info from localStorage
+        localStorage.removeItem(`stream_${channelId}`);
       }
 
       // Update channel to offline status
@@ -228,9 +293,8 @@ const Stream = () => {
   };
 
   const toggleVideo = () => {
-    if (videoRef.current && videoRef.current.srcObject) {
-      const stream = videoRef.current.srcObject as MediaStream;
-      stream.getVideoTracks().forEach(track => {
+    if (mediaStream) {
+      mediaStream.getVideoTracks().forEach(track => {
         track.enabled = !track.enabled;
       });
       setIsVideoEnabled(!isVideoEnabled);
@@ -243,9 +307,8 @@ const Stream = () => {
   };
 
   const toggleAudio = () => {
-    if (videoRef.current && videoRef.current.srcObject) {
-      const stream = videoRef.current.srcObject as MediaStream;
-      stream.getAudioTracks().forEach(track => {
+    if (mediaStream) {
+      mediaStream.getAudioTracks().forEach(track => {
         track.enabled = !track.enabled;
       });
       setIsAudioEnabled(!isAudioEnabled);
