@@ -1,4 +1,5 @@
 
+
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -10,6 +11,7 @@ import Dashboard from "./pages/Dashboard";
 import Stream from "./pages/Stream";
 import Watch from "./pages/Watch";
 import NotFound from "./pages/NotFound";
+import DevInfo from "./components/DevInfo";
 import { AuthProvider } from "./contexts/AuthContext";
 
 const queryClient = new QueryClient();
@@ -20,6 +22,7 @@ const App = () => (
       <AuthProvider>
         <Toaster />
         <Sonner />
+        <DevInfo />
         <BrowserRouter>
           <Routes>
             <Route path="/" element={<Index />} />
@@ -36,3 +39,4 @@ const App = () => (
 );
 
 export default App;
+

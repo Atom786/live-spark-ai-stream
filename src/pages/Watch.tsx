@@ -1,4 +1,3 @@
-
 import { useState, useRef, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
@@ -43,12 +42,13 @@ const Watch = () => {
     return uuidRegex.test(str);
   };
 
-  // Get current domain for sharing
+  // Get current domain - properly detects local vs production
   const getCurrentDomain = () => {
     if (typeof window !== 'undefined') {
       return window.location.origin;
     }
-    return 'https://streamai.app'; // fallback
+    // Fallback for server-side rendering (shouldn't happen in this case)
+    return 'http://localhost:8080';
   };
 
   useEffect(() => {
