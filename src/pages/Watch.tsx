@@ -1,3 +1,4 @@
+
 import { useState, useRef, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
@@ -5,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Video, Users, MessageSquare, ThumbsUp, AlertCircle } from 'lucide-react';
+import { Video, Users, MessageSquare, ThumbsUp, AlertCircle, ExternalLink } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
 
@@ -42,6 +43,14 @@ const Watch = () => {
     return uuidRegex.test(str);
   };
 
+  // Get current domain for sharing
+  const getCurrentDomain = () => {
+    if (typeof window !== 'undefined') {
+      return window.location.origin;
+    }
+    return 'https://streamai.app'; // fallback
+  };
+
   useEffect(() => {
     const fetchChannelData = async () => {
       if (!channelId) {
@@ -69,7 +78,7 @@ const Watch = () => {
           .from('channels')
           .select('*')
           .eq('id', channelId)
-          .maybeSingle(); // Use maybeSingle instead of single to avoid errors when no data
+          .maybeSingle();
 
         if (channelError) {
           console.error('Database error fetching channel:', channelError);
@@ -275,6 +284,15 @@ const Watch = () => {
     setChatMessage('');
   };
 
+  const copyWatchLink = () => {
+    const watchUrl = `${getCurrentDomain()}/watch/${channelId}`;
+    navigator.clipboard.writeText(watchUrl);
+    toast({
+      title: "Link copied!",
+      description: "Watch link copied to clipboard",
+    });
+  };
+
   if (isLoading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-gray-900 via-purple-900 to-violet-900 flex items-center justify-center">
@@ -300,12 +318,17 @@ const Watch = () => {
               </p>
             )}
           </div>
-          <Button
-            onClick={() => navigate('/')}
-            className="bg-purple-600 hover:bg-purple-700"
-          >
-            Go Back Home
-          </Button>
+          <div className="space-y-3">
+            <Button
+              onClick={() => navigate('/')}
+              className="bg-purple-600 hover:bg-purple-700 w-full"
+            >
+              Go Back Home
+            </Button>
+            <div className="text-xs text-gray-400">
+              <p>Correct URL format: {getCurrentDomain()}/watch/[valid-uuid]</p>
+            </div>
+          </div>
         </div>
       </div>
     );
@@ -371,9 +394,19 @@ const Watch = () => {
         <div className="flex flex-col md:flex-row space-y-6 md:space-y-0 md:space-x-6">
           {/* Main Content */}
           <div className="flex-1">
-            <div className="mb-4">
-              <h1 className="text-3xl font-bold text-white">{channelData.name}</h1>
-              <p className="text-gray-300">{channelData.description}</p>
+            <div className="mb-4 flex items-center justify-between">
+              <div>
+                <h1 className="text-3xl font-bold text-white">{channelData.name}</h1>
+                <p className="text-gray-300">{channelData.description}</p>
+              </div>
+              <Button
+                onClick={copyWatchLink}
+                variant="outline"
+                className="border-white/10 text-white hover:bg-white/10 flex items-center gap-2"
+              >
+                <ExternalLink className="h-4 w-4" />
+                Copy Watch Link
+              </Button>
             </div>
             
             <div className="relative">
@@ -384,6 +417,11 @@ const Watch = () => {
                   <p className="text-gray-400 mt-2">
                     {isLive ? 'Live stream placeholder' : 'Stream is offline'}
                   </p>
+                  {!isLive && (
+                    <p className="text-gray-500 text-sm mt-1">
+                      This channel is not currently streaming
+                    </p>
+                  )}
                 </div>
                 
                 {/* Live badge */}
@@ -465,6 +503,12 @@ const Watch = () => {
                 <div className="flex justify-between">
                   <span className="text-gray-300">Started:</span>
                   <span className="text-white">{isLive ? '12 minutes ago' : 'Not streaming'}</span>
+                </div>
+                <div className="pt-2 border-t border-white/10">
+                  <p className="text-xs text-gray-400">Share this stream:</p>
+                  <p className="text-xs text-white font-mono break-all bg-gray-800/50 p-1 rounded mt-1">
+                    {getCurrentDomain()}/watch/{channelId}
+                  </p>
                 </div>
               </CardContent>
             </Card>
