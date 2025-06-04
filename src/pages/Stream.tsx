@@ -1,4 +1,3 @@
-
 import { useState, useRef, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
@@ -8,20 +7,25 @@ import { Video, VideoOff, Mic, MicOff, Users, Settings, X } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { SpeechToText } from '@/components/SpeechToText';
 import { MoodDetection } from '@/components/MoodDetection';
+import { supabase } from '@/integrations/supabase/client';
+import { useToast } from '@/hooks/use-toast';
 
 const Stream = () => {
   const { channelId } = useParams();
   const { user } = useAuth();
   const navigate = useNavigate();
+  const { toast } = useToast();
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isStreaming, setIsStreaming] = useState(false);
-  const [isVideoEnabled, setIsVideoEnable] = useState(true);
+  const [isVideoEnabled, setIsVideoEnabled] = useState(true);
   const [isAudioEnabled, setIsAudioEnabled] = useState(true);
   const [viewerCount, setViewerCount] = useState(0);
   const [streamDuration, setStreamDuration] = useState(0);
   const [mood, setMood] = useState<string>('Neutral');
   const [transcript, setTranscript] = useState<string>('');
+  const [currentStreamId, setCurrentStreamId] = useState<string | null>(null);
   const streamTimer = useRef<NodeJS.Timeout>();
+  const viewerCountTimer = useRef<NodeJS.Timeout>();
 
   useEffect(() => {
     if (!user) {
@@ -29,67 +33,197 @@ const Stream = () => {
       return;
     }
 
-    // Request camera and microphone permissions
-    startPreview();
+    // Start camera preview immediately
+    initializeCamera();
 
     return () => {
-      stopPreview();
-      if (streamTimer.current) {
-        clearInterval(streamTimer.current);
-      }
+      cleanup();
     };
   }, [user, navigate]);
 
-  const startPreview = async () => {
+  const initializeCamera = async () => {
     try {
+      console.log('Initializing camera...');
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: true,
+        video: { width: 1280, height: 720 },
         audio: true
       });
       
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
+        videoRef.current.play();
+        console.log('Camera initialized successfully');
+        
+        toast({
+          title: "Camera Ready",
+          description: "Your camera is now active and ready to stream",
+        });
       }
       
     } catch (err) {
-      console.error("Error accessing media devices:", err);
+      console.error("Error accessing camera:", err);
+      toast({
+        title: "Camera Error",
+        description: "Unable to access camera. Please check permissions.",
+        variant: "destructive",
+      });
     }
   };
 
-  const stopPreview = () => {
+  const cleanup = () => {
     if (videoRef.current && videoRef.current.srcObject) {
       const stream = videoRef.current.srcObject as MediaStream;
       stream.getTracks().forEach(track => track.stop());
       videoRef.current.srcObject = null;
     }
+    if (streamTimer.current) {
+      clearInterval(streamTimer.current);
+    }
+    if (viewerCountTimer.current) {
+      clearInterval(viewerCountTimer.current);
+    }
   };
 
-  const toggleStream = () => {
+  const toggleStream = async () => {
     if (isStreaming) {
-      // Stop streaming
+      await stopStream();
+    } else {
+      await startStream();
+    }
+  };
+
+  const startStream = async () => {
+    try {
+      console.log('Starting stream...');
+      
+      // Create a new stream record in the database
+      const { data: streamData, error: streamError } = await supabase
+        .from('streams')
+        .insert({
+          channel_id: channelId,
+          title: `${user?.channelName || 'Live Stream'}`,
+          is_live: true,
+          started_at: new Date().toISOString(),
+          viewer_count: 0
+        })
+        .select()
+        .single();
+
+      if (streamError) {
+        console.error('Error creating stream:', streamError);
+        toast({
+          title: "Stream Error",
+          description: "Failed to start stream. Please try again.",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      // Update channel to live status
+      await supabase
+        .from('channels')
+        .update({ is_live: true })
+        .eq('id', channelId);
+
+      setCurrentStreamId(streamData.id);
+      setIsStreaming(true);
+      setStreamDuration(0);
+      setViewerCount(0);
+      
+      console.log('Stream started successfully:', streamData.id);
+      
+      toast({
+        title: "Stream Started!",
+        description: "You are now live streaming",
+      });
+      
+      // Start timers
+      streamTimer.current = setInterval(() => {
+        setStreamDuration(prev => prev + 1);
+      }, 1000);
+
+      // Update viewer count every 5 seconds
+      viewerCountTimer.current = setInterval(async () => {
+        if (currentStreamId) {
+          const { data: viewers } = await supabase
+            .from('viewers')
+            .select('id')
+            .eq('stream_id', currentStreamId)
+            .is('left_at', null);
+          
+          const count = viewers?.length || 0;
+          setViewerCount(count);
+          
+          // Update viewer count in database
+          await supabase
+            .from('streams')
+            .update({ viewer_count: count })
+            .eq('id', currentStreamId);
+        }
+      }, 5000);
+      
+    } catch (error) {
+      console.error('Error starting stream:', error);
+      toast({
+        title: "Stream Error",
+        description: "Failed to start stream",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const stopStream = async () => {
+    try {
+      console.log('Stopping stream...');
+      
+      if (currentStreamId) {
+        // Update stream record
+        await supabase
+          .from('streams')
+          .update({
+            is_live: false,
+            ended_at: new Date().toISOString()
+          })
+          .eq('id', currentStreamId);
+
+        // Update all viewers to left
+        await supabase
+          .from('viewers')
+          .update({ left_at: new Date().toISOString() })
+          .eq('stream_id', currentStreamId)
+          .is('left_at', null);
+      }
+
+      // Update channel to offline status
+      await supabase
+        .from('channels')
+        .update({ is_live: false })
+        .eq('id', channelId);
+
       setIsStreaming(false);
+      setCurrentStreamId(null);
+      
       if (streamTimer.current) {
         clearInterval(streamTimer.current);
       }
-    } else {
-      // Start streaming
-      setIsStreaming(true);
-      setStreamDuration(0);
+      if (viewerCountTimer.current) {
+        clearInterval(viewerCountTimer.current);
+      }
       
-      // Simulate viewer count increase
-      const randomViewerIncrement = () => {
-        setViewerCount(prev => Math.min(prev + Math.floor(Math.random() * 3), 100));
-      };
+      console.log('Stream stopped successfully');
       
-      // Start stream duration timer
-      streamTimer.current = setInterval(() => {
-        setStreamDuration(prev => prev + 1);
-        
-        // Occasionally increase viewer count
-        if (Math.random() > 0.8) {
-          randomViewerIncrement();
-        }
-      }, 1000);
+      toast({
+        title: "Stream Ended",
+        description: "Your stream has been stopped",
+      });
+      
+    } catch (error) {
+      console.error('Error stopping stream:', error);
+      toast({
+        title: "Error",
+        description: "Failed to stop stream properly",
+        variant: "destructive",
+      });
     }
   };
 
@@ -99,7 +233,12 @@ const Stream = () => {
       stream.getVideoTracks().forEach(track => {
         track.enabled = !track.enabled;
       });
-      setIsVideoEnable(!isVideoEnabled);
+      setIsVideoEnabled(!isVideoEnabled);
+      
+      toast({
+        title: isVideoEnabled ? "Video Disabled" : "Video Enabled",
+        description: `Camera is now ${isVideoEnabled ? "off" : "on"}`,
+      });
     }
   };
 
@@ -110,6 +249,11 @@ const Stream = () => {
         track.enabled = !track.enabled;
       });
       setIsAudioEnabled(!isAudioEnabled);
+      
+      toast({
+        title: isAudioEnabled ? "Audio Muted" : "Audio Unmuted",
+        description: `Microphone is now ${isAudioEnabled ? "off" : "on"}`,
+      });
     }
   };
 
@@ -127,12 +271,27 @@ const Stream = () => {
     setTranscript(text);
   };
 
-  const endStream = () => {
-    setIsStreaming(false);
-    if (streamTimer.current) {
-      clearInterval(streamTimer.current);
+  const endStream = async () => {
+    if (isStreaming) {
+      await stopStream();
     }
     navigate('/dashboard');
+  };
+
+  const getCurrentDomain = () => {
+    if (typeof window !== 'undefined') {
+      return window.location.origin;
+    }
+    return 'http://localhost:8080';
+  };
+
+  const copyWatchLink = () => {
+    const watchUrl = `${getCurrentDomain()}/watch/${channelId}`;
+    navigator.clipboard.writeText(watchUrl);
+    toast({
+      title: "Link copied!",
+      description: "Watch link copied to clipboard",
+    });
   };
 
   return (
@@ -145,15 +304,27 @@ const Stream = () => {
               <div>
                 <h1 className="text-3xl font-bold text-white">{user?.channelName}</h1>
                 <p className="text-gray-300">Stream ID: {channelId}</p>
+                {isStreaming && (
+                  <p className="text-green-400 font-semibold">🔴 LIVE</p>
+                )}
               </div>
-              <Button 
-                onClick={endStream} 
-                variant="ghost" 
-                className="text-gray-300 hover:text-white hover:bg-red-700"
-              >
-                <X className="h-4 w-4 mr-2" />
-                End Stream
-              </Button>
+              <div className="flex gap-2">
+                <Button 
+                  onClick={copyWatchLink}
+                  variant="outline" 
+                  className="border-white/10 text-white hover:bg-white/10"
+                >
+                  Copy Watch Link
+                </Button>
+                <Button 
+                  onClick={endStream} 
+                  variant="ghost" 
+                  className="text-gray-300 hover:text-white hover:bg-red-700"
+                >
+                  <X className="h-4 w-4 mr-2" />
+                  End Stream
+                </Button>
+              </div>
             </div>
             
             <div className="relative">
@@ -204,23 +375,30 @@ const Stream = () => {
                   {transcript}
                 </div>
               )}
+
+              {/* Camera status overlay */}
+              {!isVideoEnabled && (
+                <div className="absolute inset-0 bg-black/80 flex items-center justify-center">
+                  <VideoOff className="h-16 w-16 text-gray-400" />
+                </div>
+              )}
             </div>
             
             <div className="mt-4 flex justify-between">
               <div className="flex space-x-2">
                 <Button 
                   onClick={toggleStream} 
-                  className={isStreaming ? "bg-gray-600 hover:bg-gray-700" : "bg-red-600 hover:bg-red-700"}
+                  className={isStreaming ? "bg-red-600 hover:bg-red-700" : "bg-green-600 hover:bg-green-700"}
                 >
                   {isStreaming ? 'Stop Stream' : 'Start Stream'}
                 </Button>
                 <Button variant="outline" onClick={toggleVideo} className="border-white/10">
-                  {isVideoEnabled ? <VideoOff className="h-4 w-4 mr-2" /> : <Video className="h-4 w-4 mr-2" />}
-                  {isVideoEnabled ? 'Disable Video' : 'Enable Video'}
+                  {isVideoEnabled ? <Video className="h-4 w-4 mr-2" /> : <VideoOff className="h-4 w-4 mr-2" />}
+                  {isVideoEnabled ? 'Camera On' : 'Camera Off'}
                 </Button>
                 <Button variant="outline" onClick={toggleAudio} className="border-white/10">
-                  {isAudioEnabled ? <MicOff className="h-4 w-4 mr-2" /> : <Mic className="h-4 w-4 mr-2" />}
-                  {isAudioEnabled ? 'Disable Audio' : 'Enable Audio'}
+                  {isAudioEnabled ? <Mic className="h-4 w-4 mr-2" /> : <MicOff className="h-4 w-4 mr-2" />}
+                  {isAudioEnabled ? 'Mic On' : 'Mic Off'}
                 </Button>
               </div>
               <Button variant="outline" className="border-white/10">
@@ -254,6 +432,12 @@ const Stream = () => {
                 <div className="flex justify-between">
                   <span className="text-gray-300">Mood:</span>
                   <span className="text-white">{mood}</span>
+                </div>
+                <div className="pt-2 border-t border-white/10">
+                  <p className="text-xs text-gray-400">Share this stream:</p>
+                  <p className="text-xs text-white font-mono break-all bg-gray-800/50 p-1 rounded mt-1">
+                    {getCurrentDomain()}/watch/{channelId}
+                  </p>
                 </div>
               </CardContent>
             </Card>

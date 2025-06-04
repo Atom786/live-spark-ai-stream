@@ -1,3 +1,4 @@
+
 import { useState, useRef, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
@@ -24,7 +25,8 @@ const Watch = () => {
   const [email, setEmail] = useState('');
   const [chatMessage, setChatMessage] = useState('');
   const [messages, setMessages] = useState<{ id: string; name: string; text: string }[]>([]);
-  const videoRef = useRef<HTMLVideoElement>(null);
+  const [currentViewerId, setCurrentViewerId] = useState<string | null>(null);
+  const [currentStreamId, setCurrentStreamId] = useState<string | null>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null);
   
   const [channelData, setChannelData] = useState({
@@ -47,7 +49,6 @@ const Watch = () => {
     if (typeof window !== 'undefined') {
       return window.location.origin;
     }
-    // Fallback for server-side rendering (shouldn't happen in this case)
     return 'http://localhost:8080';
   };
 
@@ -63,7 +64,6 @@ const Watch = () => {
 
       console.log('Fetching channel data for ID:', channelId);
 
-      // First validate if the channelId is a valid UUID format
       if (!isValidUUID(channelId)) {
         console.error('Invalid UUID format for channel ID:', channelId);
         setChannelExists(false);
@@ -73,12 +73,12 @@ const Watch = () => {
       }
 
       try {
-        // Check if channel exists using the correct UUID
+        // Check if channel exists and get its current status
         const { data: channel, error: channelError } = await supabase
           .from('channels')
           .select('*')
           .eq('id', channelId)
-          .maybeSingle();
+          .single();
 
         if (channelError) {
           console.error('Database error fetching channel:', channelError);
@@ -104,11 +104,11 @@ const Watch = () => {
         });
         setIsLive(channel.is_live || false);
 
-        // Get current viewer count for this channel's live stream
+        // Get current live stream if channel is live
         if (channel.is_live) {
           const { data: streams, error: streamsError } = await supabase
             .from('streams')
-            .select('id, viewer_count')
+            .select('*')
             .eq('channel_id', channelId)
             .eq('is_live', true)
             .order('created_at', { ascending: false })
@@ -117,7 +117,9 @@ const Watch = () => {
           if (streamsError) {
             console.error('Error fetching streams:', streamsError);
           } else if (streams && streams.length > 0) {
+            setCurrentStreamId(streams[0].id);
             setViewerCount(streams[0].viewer_count || 0);
+            console.log('Live stream found:', streams[0].id);
           }
         }
 
@@ -133,6 +135,29 @@ const Watch = () => {
     fetchChannelData();
   }, [channelId]);
 
+  // Update viewer count every 5 seconds when watching live stream
+  useEffect(() => {
+    if (!isLive || !currentStreamId) return;
+
+    const interval = setInterval(async () => {
+      try {
+        const { data: stream } = await supabase
+          .from('streams')
+          .select('viewer_count')
+          .eq('id', currentStreamId)
+          .single();
+        
+        if (stream) {
+          setViewerCount(stream.viewer_count || 0);
+        }
+      } catch (error) {
+        console.error('Error updating viewer count:', error);
+      }
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [isLive, currentStreamId]);
+
   useEffect(() => {
     if (chatContainerRef.current) {
       chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
@@ -140,8 +165,10 @@ const Watch = () => {
   }, [messages]);
 
   useEffect(() => {
-    if (!showRegistration && channelExists) {
+    if (!showRegistration && channelExists && isLive) {
+      // Start simulated live content updates
       const transcriptMessages = [
+        "Welcome everyone to the live stream!",
         "Let me show you how this AI mood detection works.",
         "It uses computer vision to analyze facial expressions.",
         "The speech recognition is another amazing feature we're using.",
@@ -154,14 +181,14 @@ const Watch = () => {
       const transcriptInterval = setInterval(() => {
         setTranscript(transcriptMessages[index % transcriptMessages.length]);
         index++;
-      }, 5000);
+      }, 8000);
       
-      const moods = ['Happy', 'Neutral', 'Happy', 'Surprised', 'Neutral'];
+      const moods = ['Happy', 'Neutral', 'Happy', 'Surprised', 'Neutral', 'Happy'];
       let moodIndex = 0;
       const moodInterval = setInterval(() => {
         setCurrentMood(moods[moodIndex % moods.length]);
         moodIndex++;
-      }, 8000);
+      }, 10000);
       
       const presetMessages = [
         { name: 'John', text: "This is amazing technology!" },
@@ -169,11 +196,13 @@ const Watch = () => {
         { name: 'Alex', text: "The captions are working really well" },
         { name: 'Sophia', text: "Are you using TensorFlow.js for the mood detection?" },
         { name: 'Michael', text: "Can you explain how the WebRTC setup works?" },
+        { name: 'Sarah', text: "The video quality looks great!" },
+        { name: 'David', text: "This is the future of streaming!" },
       ];
       
       let msgIndex = 0;
       const chatInterval = setInterval(() => {
-        if (Math.random() > 0.3) {
+        if (Math.random() > 0.4) {
           const msg = presetMessages[msgIndex % presetMessages.length];
           setMessages(prev => [
             ...prev, 
@@ -181,7 +210,7 @@ const Watch = () => {
           ]);
           msgIndex++;
         }
-      }, 7000);
+      }, 8000);
       
       return () => {
         clearInterval(transcriptInterval);
@@ -189,7 +218,7 @@ const Watch = () => {
         clearInterval(chatInterval);
       };
     }
-  }, [showRegistration, channelExists]);
+  }, [showRegistration, channelExists, isLive]);
 
   const handleSubmitRegistration = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -212,25 +241,27 @@ const Watch = () => {
       return;
     }
 
-    // Register viewer in database if channel exists
-    if (channelExists && channelId) {
+    // Register viewer in database if channel is live
+    if (channelExists && currentStreamId) {
       try {
-        const { data: streams } = await supabase
-          .from('streams')
-          .select('id')
-          .eq('channel_id', channelId)
-          .eq('is_live', true)
-          .limit(1);
+        console.log('Registering viewer for stream:', currentStreamId);
+        
+        const { data: viewer, error: viewerError } = await supabase
+          .from('viewers')
+          .insert({
+            stream_id: currentStreamId,
+            first_name: firstName,
+            last_name: lastName,
+            email: email,
+          })
+          .select()
+          .single();
 
-        if (streams && streams.length > 0) {
-          await supabase
-            .from('viewers')
-            .insert({
-              stream_id: streams[0].id,
-              first_name: firstName,
-              last_name: lastName,
-              email: email,
-            });
+        if (viewerError) {
+          console.error('Error registering viewer:', viewerError);
+        } else {
+          setCurrentViewerId(viewer.id);
+          console.log('Viewer registered successfully:', viewer.id);
         }
       } catch (error) {
         console.error('Error registering viewer:', error);
@@ -258,24 +289,17 @@ const Watch = () => {
     
     setMessages([...messages, newMessage]);
 
-    // Save message to database if channel exists
-    if (channelExists && channelId) {
+    // Save message to database if stream is live
+    if (channelExists && currentStreamId) {
       try {
-        const { data: streams } = await supabase
-          .from('streams')
-          .select('id')
-          .eq('channel_id', channelId)
-          .eq('is_live', true)
-          .limit(1);
-
-        if (streams && streams.length > 0) {
-          await supabase
-            .from('chat_messages')
-            .insert({
-              stream_id: streams[0].id,
-              message: chatMessage,
-            });
-        }
+        await supabase
+          .from('chat_messages')
+          .insert({
+            stream_id: currentStreamId,
+            message: chatMessage,
+            viewer_id: currentViewerId
+          });
+        console.log('Chat message saved to database');
       } catch (error) {
         console.error('Error saving chat message:', error);
       }
@@ -292,6 +316,19 @@ const Watch = () => {
       description: "Watch link copied to clipboard",
     });
   };
+
+  // Cleanup when component unmounts
+  useEffect(() => {
+    return () => {
+      if (currentViewerId && currentStreamId) {
+        // Mark viewer as left when they close the page
+        supabase
+          .from('viewers')
+          .update({ left_at: new Date().toISOString() })
+          .eq('id', currentViewerId);
+      }
+    };
+  }, [currentViewerId, currentStreamId]);
 
   if (isLoading) {
     return (
@@ -398,6 +435,9 @@ const Watch = () => {
               <div>
                 <h1 className="text-3xl font-bold text-white">{channelData.name}</h1>
                 <p className="text-gray-300">{channelData.description}</p>
+                {isLive && (
+                  <p className="text-green-400 font-semibold">🔴 LIVE NOW</p>
+                )}
               </div>
               <Button
                 onClick={copyWatchLink}
@@ -412,17 +452,29 @@ const Watch = () => {
             <div className="relative">
               {/* Video stream */}
               <div className="w-full rounded-lg bg-black aspect-video relative">
-                <div className="absolute inset-0 flex items-center justify-center flex-col">
-                  <Video className="h-16 w-16 text-gray-600" />
-                  <p className="text-gray-400 mt-2">
-                    {isLive ? 'Live stream placeholder' : 'Stream is offline'}
-                  </p>
-                  {!isLive && (
+                {isLive ? (
+                  // Live stream content
+                  <div className="absolute inset-0 flex items-center justify-center flex-col">
+                    <Video className="h-16 w-16 text-green-400" />
+                    <p className="text-green-400 mt-2 font-semibold">
+                      🔴 LIVE STREAM
+                    </p>
+                    <p className="text-gray-400 text-sm mt-1">
+                      Simulated live video stream
+                    </p>
+                  </div>
+                ) : (
+                  // Offline content
+                  <div className="absolute inset-0 flex items-center justify-center flex-col">
+                    <Video className="h-16 w-16 text-gray-600" />
+                    <p className="text-gray-400 mt-2">
+                      Stream is offline
+                    </p>
                     <p className="text-gray-500 text-sm mt-1">
                       This channel is not currently streaming
                     </p>
-                  )}
-                </div>
+                  </div>
+                )}
                 
                 {/* Live badge */}
                 {isLive && (
@@ -446,13 +498,13 @@ const Watch = () => {
                 {isLive && (
                   <div className="absolute top-16 right-4">
                     <div className="bg-black/50 backdrop-blur-sm text-white px-2 py-1 rounded-md">
-                      Mood: {currentMood === 'Happy' ? '😊' : currentMood === 'Sad' ? '😔' : '😐'} {currentMood}
+                      Mood: {currentMood === 'Happy' ? '😊' : currentMood === 'Sad' ? '😔' : currentMood === 'Surprised' ? '😲' : '😐'} {currentMood}
                     </div>
                   </div>
                 )}
                 
                 {/* Live captions */}
-                {isLive && (
+                {isLive && transcript && (
                   <div className="absolute bottom-8 left-0 right-0 mx-auto w-4/5 bg-black/60 backdrop-blur-sm rounded-lg p-3 text-white text-center">
                     {transcript}
                   </div>
@@ -502,7 +554,7 @@ const Watch = () => {
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-300">Started:</span>
-                  <span className="text-white">{isLive ? '12 minutes ago' : 'Not streaming'}</span>
+                  <span className="text-white">{isLive ? 'Just now' : 'Not streaming'}</span>
                 </div>
                 <div className="pt-2 border-t border-white/10">
                   <p className="text-xs text-gray-400">Share this stream:</p>
@@ -544,7 +596,7 @@ const Watch = () => {
                     </div>
                   ) : (
                     <div className="h-full flex items-center justify-center text-gray-500 text-sm">
-                      <p>Chat messages will appear here</p>
+                      <p>{isLive ? 'Chat messages will appear here' : 'Chat available when streaming'}</p>
                     </div>
                   )}
                 </div>
