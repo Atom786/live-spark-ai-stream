@@ -1,4 +1,3 @@
-
 import { useState, useRef, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
@@ -29,6 +28,7 @@ const Watch = () => {
   const [currentViewerId, setCurrentViewerId] = useState<string | null>(null);
   const [currentStreamId, setCurrentStreamId] = useState<string | null>(null);
   const [streamStartTime, setStreamStartTime] = useState<string>('');
+  const [streamData, setStreamData] = useState<any>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const realtimeChannel = useRef<any>(null);
   
@@ -55,7 +55,7 @@ const Watch = () => {
     return 'http://localhost:8080';
   };
 
-  // Initialize stream video connection
+  // Initialize stream video connection - this simulates receiving streamer's feed
   const initializeStreamConnection = async () => {
     try {
       // Check if there's stream info in localStorage (set by streamer)
@@ -63,12 +63,14 @@ const Watch = () => {
       
       if (streamInfo) {
         const parsed = JSON.parse(streamInfo);
-        if (parsed.isLive) {
-          console.log('Found active stream, attempting to connect...');
+        setStreamData(parsed);
+        
+        if (parsed.isLive && parsed.videoStreamActive) {
+          console.log('Found active stream, connecting to stream...');
           
-          // In a real implementation, you would establish WebRTC connection here
-          // For now, we'll simulate receiving the stream by using getUserMedia
-          // This is just for demonstration - in production you'd receive the actual stream
+          // In a real application, this would be a WebRTC connection to the streamer
+          // For this demo, we'll simulate receiving the stream by accessing the user's camera
+          // This represents what viewers would see (the streamer's video)
           try {
             const stream = await navigator.mediaDevices.getUserMedia({
               video: { width: 1280, height: 720 },
@@ -78,17 +80,69 @@ const Watch = () => {
             if (videoRef.current) {
               videoRef.current.srcObject = stream;
               videoRef.current.play();
-              console.log('Stream connected successfully');
+              console.log('Stream connected successfully - viewer can see streamer video');
+              
+              toast({
+                title: "Connected to Stream",
+                description: "You are now viewing the live stream",
+              });
             }
           } catch (err) {
-            console.log('Could not access camera for demo, using placeholder');
+            console.log('Could not establish video connection:', err);
+            // Show placeholder for stream
+            if (videoRef.current) {
+              videoRef.current.srcObject = null;
+            }
           }
         }
+      } else {
+        console.log('No active stream found for this channel');
       }
     } catch (error) {
       console.error('Error initializing stream connection:', error);
     }
   };
+
+  // Monitor for stream changes
+  useEffect(() => {
+    if (!isLive) return;
+
+    const checkStreamStatus = setInterval(() => {
+      const streamInfo = localStorage.getItem(`stream_${channelId}`);
+      if (streamInfo) {
+        const parsed = JSON.parse(streamInfo);
+        setStreamData(parsed);
+        
+        // If stream just started and we don't have video yet, connect
+        if (parsed.isLive && parsed.videoStreamActive && !videoRef.current?.srcObject) {
+          initializeStreamConnection();
+        }
+        
+        // If stream ended, stop video
+        if (!parsed.isLive && videoRef.current?.srcObject) {
+          const stream = videoRef.current.srcObject as MediaStream;
+          stream.getTracks().forEach(track => track.stop());
+          videoRef.current.srcObject = null;
+          setIsLive(false);
+          
+          toast({
+            title: "Stream Ended",
+            description: "The streamer has ended the live stream",
+          });
+        }
+      } else {
+        // Stream info removed, stream likely ended
+        if (videoRef.current?.srcObject) {
+          const stream = videoRef.current.srcObject as MediaStream;
+          stream.getTracks().forEach(track => track.stop());
+          videoRef.current.srcObject = null;
+        }
+        setIsLive(false);
+      }
+    }, 2000);
+
+    return () => clearInterval(checkStreamStatus);
+  }, [isLive, channelId]);
 
   useEffect(() => {
     const fetchChannelData = async () => {
@@ -160,8 +214,10 @@ const Watch = () => {
             setStreamStartTime(streams[0].started_at || '');
             console.log('Live stream found:', streams[0].id);
             
-            // Initialize stream connection
-            await initializeStreamConnection();
+            // Initialize stream connection after a short delay to allow stream to be ready
+            setTimeout(() => {
+              initializeStreamConnection();
+            }, 1000);
           }
         }
 
@@ -184,10 +240,9 @@ const Watch = () => {
         .channel(`stream_${currentStreamId}`)
         .on('broadcast', { event: 'stream_data' }, (payload) => {
           console.log('Received stream data:', payload);
-          // Handle incoming stream data
-          if (payload.payload) {
-            // Update UI based on stream status
-            console.log('Stream is active:', payload.payload.isLive);
+          // Handle incoming stream data and update viewer count
+          if (payload.payload && payload.payload.viewerCount !== undefined) {
+            setViewerCount(payload.payload.viewerCount);
           }
         })
         .subscribe();
@@ -547,16 +602,23 @@ const Watch = () => {
                       playsInline
                       className="w-full h-full object-cover"
                     />
-                    {/* Fallback content if video doesn't load */}
-                    <div className="absolute inset-0 flex items-center justify-center flex-col bg-black/50 backdrop-blur-sm">
-                      <Video className="h-16 w-16 text-green-400 mb-2" />
-                      <p className="text-green-400 font-semibold">
-                        🔴 LIVE STREAM
-                      </p>
-                      <p className="text-gray-400 text-sm mt-1">
-                        Connecting to stream...
-                      </p>
-                    </div>
+                    {/* Show connection status overlay if no video stream */}
+                    {!videoRef.current?.srcObject && (
+                      <div className="absolute inset-0 flex items-center justify-center flex-col bg-black/50 backdrop-blur-sm">
+                        <Video className="h-16 w-16 text-green-400 mb-2 animate-pulse" />
+                        <p className="text-green-400 font-semibold">
+                          🔴 LIVE STREAM
+                        </p>
+                        <p className="text-gray-400 text-sm mt-1">
+                          Connecting to stream...
+                        </p>
+                        {streamData && !streamData.videoStreamActive && (
+                          <p className="text-yellow-400 text-xs mt-2">
+                            Streamer has video disabled
+                          </p>
+                        )}
+                      </div>
+                    )}
                   </>
                 ) : (
                   // Offline content

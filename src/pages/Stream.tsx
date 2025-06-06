@@ -1,4 +1,3 @@
-
 import { useState, useRef, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
@@ -55,11 +54,23 @@ const Stream = () => {
         })
         .subscribe();
 
-      // Broadcast stream data every 2 seconds
+      // Broadcast stream data every 2 seconds including video stream info
       const interval = setInterval(() => {
         if (mediaStream && realtimeChannel.current) {
-          // In a real implementation, you'd send video/audio data chunks
-          // For now, we'll broadcast that the stream is active
+          // Store stream data in localStorage for viewers to access
+          const streamData = {
+            streamId: currentStreamId,
+            channelId: channelId,
+            streamerName: user?.channelName,
+            isLive: true,
+            hasVideo: isVideoEnabled,
+            hasAudio: isAudioEnabled,
+            startedAt: new Date().toISOString(),
+            // In a real app, this would be WebRTC connection info
+            videoStreamActive: true
+          };
+          localStorage.setItem(`stream_${channelId}`, JSON.stringify(streamData));
+          
           realtimeChannel.current.send({
             type: 'broadcast',
             event: 'stream_data',
@@ -67,7 +78,8 @@ const Stream = () => {
               isLive: true,
               hasVideo: isVideoEnabled,
               hasAudio: isAudioEnabled,
-              timestamp: Date.now()
+              timestamp: Date.now(),
+              viewerCount: viewerCount
             }
           });
         }
@@ -80,7 +92,7 @@ const Stream = () => {
         }
       };
     }
-  }, [isStreaming, currentStreamId, isVideoEnabled, isAudioEnabled, mediaStream]);
+  }, [isStreaming, currentStreamId, isVideoEnabled, isAudioEnabled, mediaStream, viewerCount, channelId, user?.channelName]);
 
   const initializeCamera = async () => {
     try {
@@ -130,6 +142,11 @@ const Stream = () => {
     if (realtimeChannel.current) {
       supabase.removeChannel(realtimeChannel.current);
     }
+    
+    // Clear stream data when cleaning up
+    if (channelId) {
+      localStorage.removeItem(`stream_${channelId}`);
+    }
   };
 
   const toggleStream = async () => {
@@ -177,13 +194,16 @@ const Stream = () => {
         .update({ is_live: true })
         .eq('id', channelId);
 
-      // Store stream info in localStorage for viewer access
+      // Store comprehensive stream info in localStorage for viewer access
       const streamInfo = {
         streamId: streamData.id,
         channelId: channelId,
         streamerName: user?.channelName,
         isLive: true,
-        startedAt: new Date().toISOString()
+        hasVideo: isVideoEnabled,
+        hasAudio: isAudioEnabled,
+        startedAt: new Date().toISOString(),
+        videoStreamActive: true
       };
       localStorage.setItem(`stream_${channelId}`, JSON.stringify(streamInfo));
 
@@ -299,6 +319,16 @@ const Stream = () => {
       });
       setIsVideoEnabled(!isVideoEnabled);
       
+      // Update stream info in localStorage
+      if (isStreaming && channelId) {
+        const streamInfo = localStorage.getItem(`stream_${channelId}`);
+        if (streamInfo) {
+          const parsed = JSON.parse(streamInfo);
+          parsed.hasVideo = !isVideoEnabled;
+          localStorage.setItem(`stream_${channelId}`, JSON.stringify(parsed));
+        }
+      }
+      
       toast({
         title: isVideoEnabled ? "Video Disabled" : "Video Enabled",
         description: `Camera is now ${isVideoEnabled ? "off" : "on"}`,
@@ -312,6 +342,16 @@ const Stream = () => {
         track.enabled = !track.enabled;
       });
       setIsAudioEnabled(!isAudioEnabled);
+      
+      // Update stream info in localStorage
+      if (isStreaming && channelId) {
+        const streamInfo = localStorage.getItem(`stream_${channelId}`);
+        if (streamInfo) {
+          const parsed = JSON.parse(streamInfo);
+          parsed.hasAudio = !isAudioEnabled;
+          localStorage.setItem(`stream_${channelId}`, JSON.stringify(parsed));
+        }
+      }
       
       toast({
         title: isAudioEnabled ? "Audio Muted" : "Audio Unmuted",
