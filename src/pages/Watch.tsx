@@ -14,12 +14,14 @@ const Watch = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
   const videoRef = useRef<HTMLVideoElement>(null);
+  const peerConnection = useRef<RTCPeerConnection | null>(null);
+  const peerConnections = useRef<Map<string, RTCPeerConnection>>(new Map());
   
   const [isLoading, setIsLoading] = useState(true);
   const [channelExists, setChannelExists] = useState(false);
   const [isLive, setIsLive] = useState(false);
   const [viewerCount, setViewerCount] = useState(0);
-  const [showRegistration, setShowRegistration] = useState(true);
+  // const [showRegistration, setShowRegistration] = useState(true);
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState('');
@@ -55,6 +57,104 @@ const Watch = () => {
     return 'http://localhost:8080';
   };
 
+  // Initialize WebRTC connection
+  const initializeWebRTC = async () => {
+    try {
+      console.log('Initializing WebRTC connection...');
+      
+      // Create RTCPeerConnection with STUN servers
+      const configuration = {
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' }
+        ]
+      };
+      
+      peerConnection.current = new RTCPeerConnection(configuration);
+      
+      // Handle incoming tracks
+      peerConnection.current.ontrack = (event) => {
+        console.log('Received remote track:', event.track.kind);
+        if (videoRef.current && event.streams[0]) {
+          videoRef.current.srcObject = event.streams[0];
+          videoRef.current.play().catch(console.error);
+        }
+      };
+      
+      // Handle ICE candidates
+      peerConnection.current.onicecandidate = (event) => {
+        if (event.candidate) {
+          console.log('Sending ICE candidate to streamer');
+          realtimeChannel.current?.send({
+            type: 'broadcast',
+            event: 'ice_candidate',
+            payload: {
+              candidate: event.candidate,
+              viewerId: currentViewerId
+            }
+          });
+        }
+      };
+      
+      // Create and send offer
+      const offer = await peerConnection.current.createOffer();
+      await peerConnection.current.setLocalDescription(offer);
+      
+      console.log('Sending offer to streamer');
+      realtimeChannel.current?.send({
+        type: 'broadcast',
+        event: 'viewer_offer',
+        payload: {
+          offer: peerConnection.current.localDescription,
+          viewerId: currentViewerId
+        }
+      });
+      
+    } catch (error) {
+      console.error('Error initializing WebRTC:', error);
+      toast({
+        title: "Connection Error",
+        description: "Failed to establish video connection",
+        variant: "destructive",
+      });
+    }
+  };
+
+  // Handle answer from streamer
+  const handleStreamerAnswer = async (answer: RTCSessionDescriptionInit) => {
+    try {
+      if (peerConnection.current) {
+        await peerConnection.current.setRemoteDescription(new RTCSessionDescription(answer));
+        console.log('Set remote description from streamer answer');
+      }
+    } catch (error) {
+      console.error('Error handling streamer answer:', error);
+    }
+  };
+
+  // Handle ICE candidate from streamer
+  const handleStreamerIceCandidate = async (candidate: RTCIceCandidateInit) => {
+    try {
+      if (peerConnection.current) {
+        await peerConnection.current.addIceCandidate(new RTCIceCandidate(candidate));
+        console.log('Added ICE candidate from streamer');
+      }
+    } catch (error) {
+      console.error('Error adding ICE candidate:', error);
+    }
+  };
+
+  // Cleanup WebRTC connection
+  const cleanupWebRTC = () => {
+    if (peerConnection.current) {
+      peerConnection.current.close();
+      peerConnection.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+  };
+
   // Monitor for live stream data
   useEffect(() => {
     if (!channelId) return;
@@ -75,25 +175,24 @@ const Watch = () => {
             setIsLive(true);
             setViewerCount(parsed.viewerCount || 0);
             
-            // Initialize viewer video connection if not already connected
-            if (!videoRef.current?.srcObject) {
-              initializeViewerVideo();
+            // Initialize WebRTC connection if not already connected
+            if (!peerConnection.current) {
+              initializeWebRTC();
             }
           } else {
             setIsLive(false);
             setStreamData(null);
-            disconnectVideo();
+            cleanupWebRTC();
           }
         } catch (error) {
           console.error('Error parsing stream data:', error);
         }
       } else {
-        // No stream data found - stream is offline
         if (isLive) {
           console.log('Stream data not found, setting offline');
           setIsLive(false);
           setStreamData(null);
-          disconnectVideo();
+          cleanupWebRTC();
           
           toast({
             title: "Stream Ended",
@@ -107,46 +206,6 @@ const Watch = () => {
       clearInterval(monitorInterval);
     };
   }, [channelId, isLive]);
-
-  // Initialize video connection to simulate viewing the streamer's feed
-  const initializeViewerVideo = async () => {
-    try {
-      console.log('Initializing viewer video connection...');
-      
-      // In a real streaming app, this would connect to the streamer's WebRTC stream
-      // For demo purposes, we'll use the viewer's camera to simulate viewing the stream
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: 1280, height: 720 },
-        audio: true
-      });
-      
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.play();
-        console.log('Viewer video connection established');
-        
-        toast({
-          title: "Connected to Stream",
-          description: "You are now viewing the live stream",
-        });
-      }
-    } catch (error) {
-      console.error('Error connecting to stream:', error);
-      // Show stream placeholder if can't access camera
-      if (videoRef.current) {
-        videoRef.current.srcObject = null;
-      }
-    }
-  };
-
-  const disconnectVideo = () => {
-    if (videoRef.current && videoRef.current.srcObject) {
-      const stream = videoRef.current.srcObject as MediaStream;
-      stream.getTracks().forEach(track => track.stop());
-      videoRef.current.srcObject = null;
-      console.log('Video disconnected');
-    }
-  };
 
   useEffect(() => {
     const fetchChannelData = async () => {
@@ -240,6 +299,14 @@ const Watch = () => {
             setStreamData(payload.payload);
           }
         })
+        .on('broadcast', { event: 'streamer_answer' }, (payload) => {
+          console.log('Received streamer answer:', payload);
+          handleStreamerAnswer(payload.payload.answer);
+        })
+        .on('broadcast', { event: 'streamer_ice_candidate' }, (payload) => {
+          console.log('Received streamer ICE candidate:', payload);
+          handleStreamerIceCandidate(payload.payload.candidate);
+        })
         .subscribe();
 
       return () => {
@@ -258,7 +325,7 @@ const Watch = () => {
 
   // Simulate live content updates when watching
   useEffect(() => {
-    if (!showRegistration && channelExists && isLive) {
+    if (channelExists && isLive) {
       const transcriptMessages = [
         "Welcome everyone to the live stream!",
         "Let me show you how this AI mood detection works.",
@@ -310,7 +377,7 @@ const Watch = () => {
         clearInterval(chatInterval);
       };
     }
-  }, [showRegistration, channelExists, isLive]);
+  }, [ channelExists, isLive]);
 
   const handleSubmitRegistration = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -365,7 +432,7 @@ const Watch = () => {
       description: "You're all set to watch the stream",
     });
     
-    setShowRegistration(false);
+    // setShowRegistration(false);
   };
 
   const handleSendMessage = async (e: React.FormEvent) => {
@@ -430,13 +497,23 @@ const Watch = () => {
           .eq('id', currentViewerId);
       }
       
-      disconnectVideo();
+      cleanupWebRTC();
       
       if (realtimeChannel.current) {
         supabase.removeChannel(realtimeChannel.current);
       }
     };
   }, [currentViewerId, currentStreamId]);
+
+  const cleanup = () => {
+    console.log('Cleaning up stream...');
+    
+    // Close all peer connections
+    peerConnection.current?.close();
+    peerConnection.current = null;
+    
+    // ... rest of your existing cleanup code ...
+  };
 
   if (isLoading) {
     return (
@@ -483,7 +560,7 @@ const Watch = () => {
     <div className="min-h-screen bg-gradient-to-br from-gray-900 via-purple-900 to-violet-900">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
         {/* Registration Dialog */}
-        <Dialog open={showRegistration} onOpenChange={setShowRegistration}>
+        {/* <Dialog open={showRegistration} onOpenChange={setShowRegistration}>
           <DialogContent className="bg-gray-900 border-purple-400/20">
             <DialogHeader>
               <DialogTitle className="text-white">Welcome to {channelData.name}</DialogTitle>
@@ -534,7 +611,7 @@ const Watch = () => {
               </DialogFooter>
             </form>
           </DialogContent>
-        </Dialog>
+        </Dialog> */}
 
         <div className="flex flex-col md:flex-row space-y-6 md:space-y-0 md:space-x-6">
           {/* Main Content */}
@@ -715,12 +792,12 @@ const Watch = () => {
                     placeholder="Type a message..."
                     value={chatMessage}
                     onChange={e => setChatMessage(e.target.value)}
-                    disabled={showRegistration || !isLive}
+                    disabled={!isLive}
                     className="flex-1 rounded-l-md py-2 px-3 bg-white/10 border-r-0 border border-white/10 text-white placeholder:text-gray-500 focus:outline-none"
                   />
                   <Button 
                     type="submit" 
-                    disabled={showRegistration || !isLive}
+                    disabled={!isLive}
                     className="rounded-l-none bg-purple-600 hover:bg-purple-700"
                   >
                     Send

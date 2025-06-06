@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Video, VideoOff, Mic, MicOff, Users, Settings, X } from 'lucide-react';
+import { Video, VideoOff, Mic, MicOff, Users, Settings, X, Clock } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { SpeechToText } from '@/components/SpeechToText';
 import { MoodDetection } from '@/components/MoodDetection';
@@ -28,6 +28,7 @@ const Stream = () => {
   const streamTimer = useRef<NodeJS.Timeout>();
   const viewerCountTimer = useRef<NodeJS.Timeout>();
   const realtimeChannel = useRef<any>(null);
+  const peerConnections = useRef<Map<string, RTCPeerConnection>>(new Map());
 
   useEffect(() => {
     if (!user) {
@@ -42,52 +43,91 @@ const Stream = () => {
     };
   }, [user, navigate]);
 
-  // Broadcast stream data in real-time
+  // Handle viewer offers and ICE candidates
   useEffect(() => {
     if (isStreaming && currentStreamId && mediaStream) {
       realtimeChannel.current = supabase
         .channel(`stream_${currentStreamId}`)
-        .on('broadcast', { event: 'viewer_joined' }, () => {
-          console.log('Viewer joined the stream');
+        .on('broadcast', { event: 'viewer_offer' }, async (payload) => {
+          console.log('Received viewer offer:', payload);
+          const { offer, viewerId } = payload.payload;
+          
+          try {
+            // Create new peer connection for this viewer
+            const configuration = {
+              iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' }
+              ]
+            };
+            
+            const peerConnection = new RTCPeerConnection(configuration);
+            peerConnections.current.set(viewerId, peerConnection);
+            
+            // Add local tracks to the peer connection
+            mediaStream.getTracks().forEach(track => {
+              peerConnection.addTrack(track, mediaStream);
+            });
+            
+            // Handle ICE candidates from viewer
+            peerConnection.onicecandidate = (event) => {
+              if (event.candidate) {
+                console.log('Sending ICE candidate to viewer:', viewerId);
+                realtimeChannel.current?.send({
+                  type: 'broadcast',
+                  event: 'streamer_ice_candidate',
+                  payload: {
+                    candidate: event.candidate,
+                    viewerId: viewerId
+                  }
+                });
+              }
+            };
+            
+            // Set remote description from viewer's offer
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+            
+            // Create and send answer
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+            
+            console.log('Sending answer to viewer:', viewerId);
+            realtimeChannel.current?.send({
+              type: 'broadcast',
+              event: 'streamer_answer',
+              payload: {
+                answer: peerConnection.localDescription,
+                viewerId: viewerId
+              }
+            });
+            
+          } catch (error) {
+            console.error('Error handling viewer offer:', error);
+          }
+        })
+        .on('broadcast', { event: 'ice_candidate' }, async (payload) => {
+          console.log('Received ICE candidate from viewer:', payload);
+          const { candidate, viewerId } = payload.payload;
+          
+          try {
+            const peerConnection = peerConnections.current.get(viewerId);
+            if (peerConnection) {
+              await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+              console.log('Added ICE candidate from viewer:', viewerId);
+            }
+          } catch (error) {
+            console.error('Error adding ICE candidate from viewer:', error);
+          }
         })
         .subscribe();
 
-      // Broadcast stream status every 2 seconds
-      const broadcastInterval = setInterval(() => {
-        const streamData = {
-          streamId: currentStreamId,
-          channelId: channelId,
-          streamerName: user?.channelName,
-          isLive: true,
-          hasVideo: isVideoEnabled,
-          hasAudio: isAudioEnabled,
-          viewerCount: viewerCount,
-          timestamp: Date.now()
-        };
-
-        // Store in localStorage for cross-tab communication
-        localStorage.setItem(`live_stream_${channelId}`, JSON.stringify(streamData));
-        
-        // Broadcast via Supabase realtime
-        if (realtimeChannel.current) {
-          realtimeChannel.current.send({
-            type: 'broadcast',
-            event: 'stream_update',
-            payload: streamData
-          });
-        }
-
-        console.log('Broadcasting stream data:', streamData);
-      }, 2000);
-
       return () => {
-        clearInterval(broadcastInterval);
         if (realtimeChannel.current) {
           supabase.removeChannel(realtimeChannel.current);
         }
       };
     }
-  }, [isStreaming, currentStreamId, mediaStream, isVideoEnabled, isAudioEnabled, viewerCount, channelId, user?.channelName]);
+  }, [isStreaming, currentStreamId, mediaStream]);
 
   const initializeCamera = async () => {
     try {
@@ -122,6 +162,13 @@ const Stream = () => {
 
   const cleanup = () => {
     console.log('Cleaning up stream...');
+    
+    // Close all peer connections
+    peerConnections.current.forEach((pc, viewerId) => {
+      pc.close();
+      console.log('Closed peer connection for viewer:', viewerId);
+    });
+    peerConnections.current.clear();
     
     if (mediaStream) {
       mediaStream.getTracks().forEach(track => track.stop());
