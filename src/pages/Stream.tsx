@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Video, VideoOff, Mic, MicOff, Users, Settings, X, Clock } from 'lucide-react';
+import { Video, VideoOff, Clock, Mic, MicOff, Users, Settings, X } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { SpeechToText } from '@/components/SpeechToText';
 import { MoodDetection } from '@/components/MoodDetection';
@@ -53,7 +53,6 @@ const Stream = () => {
           const { offer, viewerId } = payload.payload;
           
           try {
-            // Create new peer connection for this viewer
             const configuration = {
               iceServers: [
                 { urls: 'stun:stun.l.google.com:19302' },
@@ -66,10 +65,11 @@ const Stream = () => {
             
             // Add local tracks to the peer connection
             mediaStream.getTracks().forEach(track => {
+              console.log('Adding track to peer connection:', track.kind);
               peerConnection.addTrack(track, mediaStream);
             });
             
-            // Handle ICE candidates from viewer
+            // Handle ICE candidates
             peerConnection.onicecandidate = (event) => {
               if (event.candidate) {
                 console.log('Sending ICE candidate to viewer:', viewerId);
@@ -81,6 +81,16 @@ const Stream = () => {
                     viewerId: viewerId
                   }
                 });
+              }
+            };
+
+            // Handle connection state changes
+            peerConnection.onconnectionstatechange = () => {
+              console.log('Connection state with viewer', viewerId, ':', peerConnection.connectionState);
+              if (peerConnection.connectionState === 'failed' || peerConnection.connectionState === 'disconnected') {
+                console.log('Removing disconnected peer connection for viewer:', viewerId);
+                peerConnection.close();
+                peerConnections.current.delete(viewerId);
               }
             };
             
@@ -103,6 +113,11 @@ const Stream = () => {
             
           } catch (error) {
             console.error('Error handling viewer offer:', error);
+            toast({
+              title: "Connection Error",
+              description: "Failed to establish connection with viewer",
+              variant: "destructive",
+            });
           }
         })
         .on('broadcast', { event: 'ice_candidate' }, async (payload) => {
@@ -472,7 +487,7 @@ const Stream = () => {
               {isStreaming && (
                 <div className="absolute top-4 right-4 flex items-center space-x-3">
                   <Badge className="bg-black/50 backdrop-blur-sm border-white/10">
-                    <Clock className="h-4 w-4 mr-1 text-gray-300" />
+                    <ClockIcon className="h-4 w-4 mr-1 text-gray-300" />
                     {formatDuration(streamDuration)}
                   </Badge>
                   <Badge className="bg-black/50 backdrop-blur-sm border-white/10">
@@ -634,8 +649,17 @@ const Stream = () => {
   );
 };
 
-const Clock = ({ className }: { className?: string }) => (
-  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+const ClockIcon = ({ className }: { className?: string }) => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    className={className}
+  >
     <circle cx="12" cy="12" r="10"></circle>
     <polyline points="12 6 12 12 16 14"></polyline>
   </svg>

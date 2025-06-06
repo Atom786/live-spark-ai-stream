@@ -77,7 +77,29 @@ const Watch = () => {
         console.log('Received remote track:', event.track.kind);
         if (videoRef.current && event.streams[0]) {
           videoRef.current.srcObject = event.streams[0];
-          videoRef.current.play().catch(console.error);
+          videoRef.current.play().catch(error => {
+            console.error('Error playing video:', error);
+            toast({
+              title: "Playback Error",
+              description: "Failed to play video stream. Please try refreshing the page.",
+              variant: "destructive",
+            });
+          });
+        }
+      };
+
+      // Handle connection state changes
+      peerConnection.current.onconnectionstatechange = () => {
+        console.log('Connection state:', peerConnection.current?.connectionState);
+        if (peerConnection.current?.connectionState === 'failed') {
+          toast({
+            title: "Connection Failed",
+            description: "Lost connection to stream. Attempting to reconnect...",
+            variant: "destructive",
+          });
+          // Attempt to reconnect
+          cleanupWebRTC();
+          initializeWebRTC();
         }
       };
       
@@ -95,9 +117,17 @@ const Watch = () => {
           });
         }
       };
+
+      // Handle ICE connection state
+      peerConnection.current.oniceconnectionstatechange = () => {
+        console.log('ICE connection state:', peerConnection.current?.iceConnectionState);
+      };
       
       // Create and send offer
-      const offer = await peerConnection.current.createOffer();
+      const offer = await peerConnection.current.createOffer({
+        offerToReceiveAudio: true,
+        offerToReceiveVideo: true
+      });
       await peerConnection.current.setLocalDescription(offer);
       
       console.log('Sending offer to streamer');
@@ -114,7 +144,7 @@ const Watch = () => {
       console.error('Error initializing WebRTC:', error);
       toast({
         title: "Connection Error",
-        description: "Failed to establish video connection",
+        description: "Failed to establish video connection. Please try refreshing the page.",
         variant: "destructive",
       });
     }
@@ -643,6 +673,7 @@ const Watch = () => {
                       autoPlay
                       playsInline
                       className="w-full h-full object-cover"
+                      style={{ transform: 'scaleX(-1)' }}
                     />
                     
                     {/* Show connection status if no video stream yet */}
