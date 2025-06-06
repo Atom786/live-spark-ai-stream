@@ -47,7 +47,7 @@ const Watch = () => {
     return uuidRegex.test(str);
   };
 
-  // Get current domain - properly detects local vs production
+  // Get current domain
   const getCurrentDomain = () => {
     if (typeof window !== 'undefined') {
       return window.location.origin;
@@ -55,94 +55,98 @@ const Watch = () => {
     return 'http://localhost:8080';
   };
 
-  // Initialize stream video connection - this simulates receiving streamer's feed
-  const initializeStreamConnection = async () => {
-    try {
-      // Check if there's stream info in localStorage (set by streamer)
-      const streamInfo = localStorage.getItem(`stream_${channelId}`);
+  // Monitor for live stream data
+  useEffect(() => {
+    if (!channelId) return;
+
+    console.log('Setting up stream monitoring for channel:', channelId);
+
+    // Check for live stream data every 2 seconds
+    const monitorInterval = setInterval(() => {
+      const streamInfo = localStorage.getItem(`live_stream_${channelId}`);
       
       if (streamInfo) {
-        const parsed = JSON.parse(streamInfo);
-        setStreamData(parsed);
-        
-        if (parsed.isLive && parsed.videoStreamActive) {
-          console.log('Found active stream, connecting to stream...');
+        try {
+          const parsed = JSON.parse(streamInfo);
+          console.log('Found stream data:', parsed);
           
-          // In a real application, this would be a WebRTC connection to the streamer
-          // For this demo, we'll simulate receiving the stream by accessing the user's camera
-          // This represents what viewers would see (the streamer's video)
-          try {
-            const stream = await navigator.mediaDevices.getUserMedia({
-              video: { width: 1280, height: 720 },
-              audio: true
-            });
+          if (parsed.isLive) {
+            setStreamData(parsed);
+            setIsLive(true);
+            setViewerCount(parsed.viewerCount || 0);
             
-            if (videoRef.current) {
-              videoRef.current.srcObject = stream;
-              videoRef.current.play();
-              console.log('Stream connected successfully - viewer can see streamer video');
-              
-              toast({
-                title: "Connected to Stream",
-                description: "You are now viewing the live stream",
-              });
+            // Initialize viewer video connection if not already connected
+            if (!videoRef.current?.srcObject) {
+              initializeViewerVideo();
             }
-          } catch (err) {
-            console.log('Could not establish video connection:', err);
-            // Show placeholder for stream
-            if (videoRef.current) {
-              videoRef.current.srcObject = null;
-            }
+          } else {
+            setIsLive(false);
+            setStreamData(null);
+            disconnectVideo();
           }
+        } catch (error) {
+          console.error('Error parsing stream data:', error);
         }
       } else {
-        console.log('No active stream found for this channel');
-      }
-    } catch (error) {
-      console.error('Error initializing stream connection:', error);
-    }
-  };
-
-  // Monitor for stream changes
-  useEffect(() => {
-    if (!isLive) return;
-
-    const checkStreamStatus = setInterval(() => {
-      const streamInfo = localStorage.getItem(`stream_${channelId}`);
-      if (streamInfo) {
-        const parsed = JSON.parse(streamInfo);
-        setStreamData(parsed);
-        
-        // If stream just started and we don't have video yet, connect
-        if (parsed.isLive && parsed.videoStreamActive && !videoRef.current?.srcObject) {
-          initializeStreamConnection();
-        }
-        
-        // If stream ended, stop video
-        if (!parsed.isLive && videoRef.current?.srcObject) {
-          const stream = videoRef.current.srcObject as MediaStream;
-          stream.getTracks().forEach(track => track.stop());
-          videoRef.current.srcObject = null;
+        // No stream data found - stream is offline
+        if (isLive) {
+          console.log('Stream data not found, setting offline');
           setIsLive(false);
+          setStreamData(null);
+          disconnectVideo();
           
           toast({
             title: "Stream Ended",
             description: "The streamer has ended the live stream",
           });
         }
-      } else {
-        // Stream info removed, stream likely ended
-        if (videoRef.current?.srcObject) {
-          const stream = videoRef.current.srcObject as MediaStream;
-          stream.getTracks().forEach(track => track.stop());
-          videoRef.current.srcObject = null;
-        }
-        setIsLive(false);
       }
     }, 2000);
 
-    return () => clearInterval(checkStreamStatus);
-  }, [isLive, channelId]);
+    return () => {
+      clearInterval(monitorInterval);
+    };
+  }, [channelId, isLive]);
+
+  // Initialize video connection to simulate viewing the streamer's feed
+  const initializeViewerVideo = async () => {
+    try {
+      console.log('Initializing viewer video connection...');
+      
+      // In a real streaming app, this would connect to the streamer's WebRTC stream
+      // For demo purposes, we'll use the viewer's camera to simulate viewing the stream
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: 1280, height: 720 },
+        audio: true
+      });
+      
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.play();
+        console.log('Viewer video connection established');
+        
+        toast({
+          title: "Connected to Stream",
+          description: "You are now viewing the live stream",
+        });
+      }
+    } catch (error) {
+      console.error('Error connecting to stream:', error);
+      // Show stream placeholder if can't access camera
+      if (videoRef.current) {
+        videoRef.current.srcObject = null;
+      }
+    }
+  };
+
+  const disconnectVideo = () => {
+    if (videoRef.current && videoRef.current.srcObject) {
+      const stream = videoRef.current.srcObject as MediaStream;
+      stream.getTracks().forEach(track => track.stop());
+      videoRef.current.srcObject = null;
+      console.log('Video disconnected');
+    }
+  };
 
   useEffect(() => {
     const fetchChannelData = async () => {
@@ -165,7 +169,7 @@ const Watch = () => {
       }
 
       try {
-        // Check if channel exists and get its current status
+        // Check if channel exists
         const { data: channel, error: channelError } = await supabase
           .from('channels')
           .select('*')
@@ -194,11 +198,10 @@ const Watch = () => {
           name: channel.name || 'Unnamed Channel',
           description: channel.description || 'Live streaming channel',
         });
-        setIsLive(channel.is_live || false);
 
-        // Get current live stream if channel is live
+        // Check if there's a current live stream
         if (channel.is_live) {
-          const { data: streams, error: streamsError } = await supabase
+          const { data: streams } = await supabase
             .from('streams')
             .select('*')
             .eq('channel_id', channelId)
@@ -206,18 +209,10 @@ const Watch = () => {
             .order('created_at', { ascending: false })
             .limit(1);
 
-          if (streamsError) {
-            console.error('Error fetching streams:', streamsError);
-          } else if (streams && streams.length > 0) {
+          if (streams && streams.length > 0) {
             setCurrentStreamId(streams[0].id);
-            setViewerCount(streams[0].viewer_count || 0);
             setStreamStartTime(streams[0].started_at || '');
-            console.log('Live stream found:', streams[0].id);
-            
-            // Initialize stream connection after a short delay to allow stream to be ready
-            setTimeout(() => {
-              initializeStreamConnection();
-            }, 1000);
+            console.log('Live stream found in database:', streams[0].id);
           }
         }
 
@@ -238,11 +233,11 @@ const Watch = () => {
     if (isLive && currentStreamId) {
       realtimeChannel.current = supabase
         .channel(`stream_${currentStreamId}`)
-        .on('broadcast', { event: 'stream_data' }, (payload) => {
-          console.log('Received stream data:', payload);
-          // Handle incoming stream data and update viewer count
-          if (payload.payload && payload.payload.viewerCount !== undefined) {
-            setViewerCount(payload.payload.viewerCount);
+        .on('broadcast', { event: 'stream_update' }, (payload) => {
+          console.log('Received real-time stream update:', payload);
+          if (payload.payload) {
+            setViewerCount(payload.payload.viewerCount || 0);
+            setStreamData(payload.payload);
           }
         })
         .subscribe();
@@ -255,38 +250,15 @@ const Watch = () => {
     }
   }, [isLive, currentStreamId]);
 
-  // Update viewer count every 5 seconds when watching live stream
-  useEffect(() => {
-    if (!isLive || !currentStreamId) return;
-
-    const interval = setInterval(async () => {
-      try {
-        const { data: stream } = await supabase
-          .from('streams')
-          .select('viewer_count')
-          .eq('id', currentStreamId)
-          .single();
-        
-        if (stream) {
-          setViewerCount(stream.viewer_count || 0);
-        }
-      } catch (error) {
-        console.error('Error updating viewer count:', error);
-      }
-    }, 5000);
-
-    return () => clearInterval(interval);
-  }, [isLive, currentStreamId]);
-
   useEffect(() => {
     if (chatContainerRef.current) {
       chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
     }
   }, [messages]);
 
+  // Simulate live content updates when watching
   useEffect(() => {
     if (!showRegistration && channelExists && isLive) {
-      // Start simulated live content updates
       const transcriptMessages = [
         "Welcome everyone to the live stream!",
         "Let me show you how this AI mood detection works.",
@@ -437,29 +409,6 @@ const Watch = () => {
     });
   };
 
-  // Cleanup when component unmounts
-  useEffect(() => {
-    return () => {
-      if (currentViewerId && currentStreamId) {
-        // Mark viewer as left when they close the page
-        supabase
-          .from('viewers')
-          .update({ left_at: new Date().toISOString() })
-          .eq('id', currentViewerId);
-      }
-      
-      // Clean up video stream
-      if (videoRef.current && videoRef.current.srcObject) {
-        const stream = videoRef.current.srcObject as MediaStream;
-        stream.getTracks().forEach(track => track.stop());
-      }
-      
-      if (realtimeChannel.current) {
-        supabase.removeChannel(realtimeChannel.current);
-      }
-    };
-  }, [currentViewerId, currentStreamId]);
-
   const getStreamDuration = () => {
     if (!streamStartTime || !isLive) return 'Not streaming';
     
@@ -470,6 +419,24 @@ const Watch = () => {
     const seconds = diffInSeconds % 60;
     return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
   };
+
+  // Cleanup when component unmounts
+  useEffect(() => {
+    return () => {
+      if (currentViewerId && currentStreamId) {
+        supabase
+          .from('viewers')
+          .update({ left_at: new Date().toISOString() })
+          .eq('id', currentViewerId);
+      }
+      
+      disconnectVideo();
+      
+      if (realtimeChannel.current) {
+        supabase.removeChannel(realtimeChannel.current);
+      }
+    };
+  }, [currentViewerId, currentStreamId]);
 
   if (isLoading) {
     return (
@@ -591,10 +558,8 @@ const Watch = () => {
             </div>
             
             <div className="relative">
-              {/* Video stream */}
               <div className="w-full rounded-lg bg-black aspect-video relative overflow-hidden">
                 {isLive ? (
-                  // Live stream content
                   <>
                     <video 
                       ref={videoRef}
@@ -602,34 +567,21 @@ const Watch = () => {
                       playsInline
                       className="w-full h-full object-cover"
                     />
-                    {/* Show connection status overlay if no video stream */}
+                    
+                    {/* Show connection status if no video stream yet */}
                     {!videoRef.current?.srcObject && (
                       <div className="absolute inset-0 flex items-center justify-center flex-col bg-black/50 backdrop-blur-sm">
                         <Video className="h-16 w-16 text-green-400 mb-2 animate-pulse" />
-                        <p className="text-green-400 font-semibold">
-                          🔴 LIVE STREAM
-                        </p>
-                        <p className="text-gray-400 text-sm mt-1">
-                          Connecting to stream...
-                        </p>
-                        {streamData && !streamData.videoStreamActive && (
-                          <p className="text-yellow-400 text-xs mt-2">
-                            Streamer has video disabled
-                          </p>
-                        )}
+                        <p className="text-green-400 font-semibold">🔴 LIVE STREAM</p>
+                        <p className="text-gray-400 text-sm mt-1">Connecting to stream...</p>
                       </div>
                     )}
                   </>
                 ) : (
-                  // Offline content
                   <div className="absolute inset-0 flex items-center justify-center flex-col">
                     <Video className="h-16 w-16 text-gray-600" />
-                    <p className="text-gray-400 mt-2">
-                      Stream is offline
-                    </p>
-                    <p className="text-gray-500 text-sm mt-1">
-                      This channel is not currently streaming
-                    </p>
+                    <p className="text-gray-400 mt-2">Stream is offline</p>
+                    <p className="text-gray-500 text-sm mt-1">This channel is not currently streaming</p>
                   </div>
                 )}
                 

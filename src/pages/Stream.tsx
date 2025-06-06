@@ -35,7 +35,6 @@ const Stream = () => {
       return;
     }
 
-    // Start camera preview immediately
     initializeCamera();
 
     return () => {
@@ -43,62 +42,58 @@ const Stream = () => {
     };
   }, [user, navigate]);
 
-  // Set up real-time communication for stream data
+  // Broadcast stream data in real-time
   useEffect(() => {
-    if (isStreaming && currentStreamId) {
+    if (isStreaming && currentStreamId && mediaStream) {
       realtimeChannel.current = supabase
         .channel(`stream_${currentStreamId}`)
-        .on('broadcast', { event: 'stream_data' }, (payload) => {
-          // Handle real-time stream data if needed
-          console.log('Stream data received:', payload);
+        .on('broadcast', { event: 'viewer_joined' }, () => {
+          console.log('Viewer joined the stream');
         })
         .subscribe();
 
-      // Broadcast stream data every 2 seconds including video stream info
-      const interval = setInterval(() => {
-        if (mediaStream && realtimeChannel.current) {
-          // Store stream data in localStorage for viewers to access
-          const streamData = {
-            streamId: currentStreamId,
-            channelId: channelId,
-            streamerName: user?.channelName,
-            isLive: true,
-            hasVideo: isVideoEnabled,
-            hasAudio: isAudioEnabled,
-            startedAt: new Date().toISOString(),
-            // In a real app, this would be WebRTC connection info
-            videoStreamActive: true
-          };
-          localStorage.setItem(`stream_${channelId}`, JSON.stringify(streamData));
-          
+      // Broadcast stream status every 2 seconds
+      const broadcastInterval = setInterval(() => {
+        const streamData = {
+          streamId: currentStreamId,
+          channelId: channelId,
+          streamerName: user?.channelName,
+          isLive: true,
+          hasVideo: isVideoEnabled,
+          hasAudio: isAudioEnabled,
+          viewerCount: viewerCount,
+          timestamp: Date.now()
+        };
+
+        // Store in localStorage for cross-tab communication
+        localStorage.setItem(`live_stream_${channelId}`, JSON.stringify(streamData));
+        
+        // Broadcast via Supabase realtime
+        if (realtimeChannel.current) {
           realtimeChannel.current.send({
             type: 'broadcast',
-            event: 'stream_data',
-            payload: {
-              isLive: true,
-              hasVideo: isVideoEnabled,
-              hasAudio: isAudioEnabled,
-              timestamp: Date.now(),
-              viewerCount: viewerCount
-            }
+            event: 'stream_update',
+            payload: streamData
           });
         }
+
+        console.log('Broadcasting stream data:', streamData);
       }, 2000);
 
       return () => {
-        clearInterval(interval);
+        clearInterval(broadcastInterval);
         if (realtimeChannel.current) {
           supabase.removeChannel(realtimeChannel.current);
         }
       };
     }
-  }, [isStreaming, currentStreamId, isVideoEnabled, isAudioEnabled, mediaStream, viewerCount, channelId, user?.channelName]);
+  }, [isStreaming, currentStreamId, mediaStream, isVideoEnabled, isAudioEnabled, viewerCount, channelId, user?.channelName]);
 
   const initializeCamera = async () => {
     try {
-      console.log('Initializing camera...');
+      console.log('Initializing streamer camera...');
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: 1280, height: 720 },
+        video: { width: 1280, height: 720, facingMode: 'user' },
         audio: true
       });
       
@@ -107,11 +102,11 @@ const Stream = () => {
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         videoRef.current.play();
-        console.log('Camera initialized successfully');
+        console.log('Streamer camera initialized successfully');
         
         toast({
           title: "Camera Ready",
-          description: "Your camera is now active and ready to stream",
+          description: "Your camera is ready to stream",
         });
       }
       
@@ -126,46 +121,44 @@ const Stream = () => {
   };
 
   const cleanup = () => {
+    console.log('Cleaning up stream...');
+    
     if (mediaStream) {
       mediaStream.getTracks().forEach(track => track.stop());
       setMediaStream(null);
     }
+    
     if (videoRef.current) {
       videoRef.current.srcObject = null;
     }
+    
     if (streamTimer.current) {
       clearInterval(streamTimer.current);
     }
+    
     if (viewerCountTimer.current) {
       clearInterval(viewerCountTimer.current);
     }
+    
     if (realtimeChannel.current) {
       supabase.removeChannel(realtimeChannel.current);
     }
     
-    // Clear stream data when cleaning up
+    // Clear stream data
     if (channelId) {
-      localStorage.removeItem(`stream_${channelId}`);
-    }
-  };
-
-  const toggleStream = async () => {
-    if (isStreaming) {
-      await stopStream();
-    } else {
-      await startStream();
+      localStorage.removeItem(`live_stream_${channelId}`);
     }
   };
 
   const startStream = async () => {
     try {
-      console.log('Starting stream...');
+      console.log('Starting stream for channel:', channelId);
       
       if (!mediaStream) {
         await initializeCamera();
       }
       
-      // Create a new stream record in the database
+      // Create stream record in database
       const { data: streamData, error: streamError } = await supabase
         .from('streams')
         .insert({
@@ -189,37 +182,28 @@ const Stream = () => {
       }
 
       // Update channel to live status
-      await supabase
+      const { error: channelError } = await supabase
         .from('channels')
         .update({ is_live: true })
         .eq('id', channelId);
 
-      // Store comprehensive stream info in localStorage for viewer access
-      const streamInfo = {
-        streamId: streamData.id,
-        channelId: channelId,
-        streamerName: user?.channelName,
-        isLive: true,
-        hasVideo: isVideoEnabled,
-        hasAudio: isAudioEnabled,
-        startedAt: new Date().toISOString(),
-        videoStreamActive: true
-      };
-      localStorage.setItem(`stream_${channelId}`, JSON.stringify(streamInfo));
+      if (channelError) {
+        console.error('Error updating channel status:', channelError);
+      }
 
       setCurrentStreamId(streamData.id);
       setIsStreaming(true);
       setStreamDuration(0);
       setViewerCount(0);
       
-      console.log('Stream started successfully:', streamData.id);
+      console.log('Stream started successfully. Stream ID:', streamData.id);
       
       toast({
-        title: "Stream Started!",
+        title: "🔴 Stream Started!",
         description: "You are now live streaming",
       });
       
-      // Start timers
+      // Start duration timer
       streamTimer.current = setInterval(() => {
         setStreamDuration(prev => prev + 1);
       }, 1000);
@@ -274,9 +258,6 @@ const Stream = () => {
           .update({ left_at: new Date().toISOString() })
           .eq('stream_id', currentStreamId)
           .is('left_at', null);
-
-        // Clear stream info from localStorage
-        localStorage.removeItem(`stream_${channelId}`);
       }
 
       // Update channel to offline status
@@ -284,6 +265,9 @@ const Stream = () => {
         .from('channels')
         .update({ is_live: false })
         .eq('id', channelId);
+
+      // Clear stream data
+      localStorage.removeItem(`live_stream_${channelId}`);
 
       setIsStreaming(false);
       setCurrentStreamId(null);
@@ -312,22 +296,20 @@ const Stream = () => {
     }
   };
 
-  const toggleVideo = () => {
+  const toggleStream = async () => {
+    if (isStreaming) {
+      await stopStream();
+    } else {
+      await startStream();
+    }
+  };
+
+  const toggleVideo = async () => {
     if (mediaStream) {
       mediaStream.getVideoTracks().forEach(track => {
         track.enabled = !track.enabled;
       });
       setIsVideoEnabled(!isVideoEnabled);
-      
-      // Update stream info in localStorage
-      if (isStreaming && channelId) {
-        const streamInfo = localStorage.getItem(`stream_${channelId}`);
-        if (streamInfo) {
-          const parsed = JSON.parse(streamInfo);
-          parsed.hasVideo = !isVideoEnabled;
-          localStorage.setItem(`stream_${channelId}`, JSON.stringify(parsed));
-        }
-      }
       
       toast({
         title: isVideoEnabled ? "Video Disabled" : "Video Enabled",
@@ -336,22 +318,12 @@ const Stream = () => {
     }
   };
 
-  const toggleAudio = () => {
+  const toggleAudio = async () => {
     if (mediaStream) {
       mediaStream.getAudioTracks().forEach(track => {
         track.enabled = !track.enabled;
       });
       setIsAudioEnabled(!isAudioEnabled);
-      
-      // Update stream info in localStorage
-      if (isStreaming && channelId) {
-        const streamInfo = localStorage.getItem(`stream_${channelId}`);
-        if (streamInfo) {
-          const parsed = JSON.parse(streamInfo);
-          parsed.hasAudio = !isAudioEnabled;
-          localStorage.setItem(`stream_${channelId}`, JSON.stringify(parsed));
-        }
-      }
       
       toast({
         title: isAudioEnabled ? "Audio Muted" : "Audio Unmuted",
@@ -406,7 +378,7 @@ const Stream = () => {
             <div className="mb-4 flex justify-between items-center">
               <div>
                 <h1 className="text-3xl font-bold text-white">{user?.channelName}</h1>
-                <p className="text-gray-300">Stream ID: {channelId}</p>
+                <p className="text-gray-300">Channel ID: {channelId}</p>
                 {isStreaming && (
                   <p className="text-green-400 font-semibold">🔴 LIVE</p>
                 )}
@@ -441,7 +413,7 @@ const Stream = () => {
               
               {/* Live badge */}
               {isStreaming && (
-                <div className="absolute top-4 left-4 flex items-center space-x-2">
+                <div className="absolute top-4 left-4">
                   <Badge className="bg-red-600 text-white">
                     <div className="w-2 h-2 bg-white rounded-full mr-1 animate-pulse"></div>
                     LIVE
