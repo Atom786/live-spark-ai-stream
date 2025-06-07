@@ -189,53 +189,59 @@ const Watch = () => {
   useEffect(() => {
     if (!channelId) return;
 
-    console.log('Setting up stream monitoring for channel:', channelId);
-
-    // Check for live stream data every 2 seconds
-    const monitorInterval = setInterval(() => {
-      const streamInfo = localStorage.getItem(`live_stream_${channelId}`);
-      
-      if (streamInfo) {
-        try {
-          const parsed = JSON.parse(streamInfo);
-          console.log('Found stream data:', parsed);
-          
-          if (parsed.isLive) {
-            setStreamData(parsed);
+    // Subscribe to the streams table for this channel
+    const channel = supabase
+      .channel(`public:streams:channel_id=eq.${channelId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'streams',
+          filter: `channel_id=eq.${channelId}`,
+        },
+        (payload) => {
+          // payload.new contains the new row data
+          const stream = payload.new as { is_live?: boolean; id?: string; started_at?: string };
+          if (stream?.is_live) {
             setIsLive(true);
-            setViewerCount(parsed.viewerCount || 0);
-            
-            // Initialize WebRTC connection if not already connected
-            if (!peerConnection.current) {
-              initializeWebRTC();
-            }
+            setCurrentStreamId(stream.id ?? null);
+            setStreamStartTime(stream.started_at ?? '');
           } else {
             setIsLive(false);
-            setStreamData(null);
-            cleanupWebRTC();
+            setCurrentStreamId(null);
+            setStreamStartTime('');
+            // Optionally: cleanup WebRTC connection here
           }
-        } catch (error) {
-          console.error('Error parsing stream data:', error);
         }
+      )
+      .subscribe();
+
+    // Initial fetch to set state on first load
+    const fetchStream = async () => {
+      const { data: streams } = await supabase
+        .from('streams')
+        .select('*')
+        .eq('channel_id', channelId)
+        .eq('is_live', true)
+        .order('created_at', { ascending: false })
+        .limit(1);
+      if (streams && streams.length > 0) {
+        setIsLive(true);
+        setCurrentStreamId(streams[0].id);
+        setStreamStartTime(streams[0].started_at || '');
       } else {
-        if (isLive) {
-          console.log('Stream data not found, setting offline');
-          setIsLive(false);
-          setStreamData(null);
-          cleanupWebRTC();
-          
-          toast({
-            title: "Stream Ended",
-            description: "The streamer has ended the live stream",
-          });
-        }
+        setIsLive(false);
+        setCurrentStreamId(null);
+        setStreamStartTime('');
       }
-    }, 2000);
+    };
+    fetchStream();
 
     return () => {
-      clearInterval(monitorInterval);
+      supabase.removeChannel(channel);
     };
-  }, [channelId, isLive]);
+  }, [channelId]);
 
   useEffect(() => {
     const fetchChannelData = async () => {
@@ -682,6 +688,7 @@ const Watch = () => {
                         <Video className="h-16 w-16 text-green-400 mb-2 animate-pulse" />
                         <p className="text-green-400 font-semibold">🔴 LIVE STREAM</p>
                         <p className="text-gray-400 text-sm mt-1">Connecting to stream...</p>
+                      
                       </div>
                     )}
                   </>

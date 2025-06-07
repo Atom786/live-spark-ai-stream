@@ -208,7 +208,7 @@ const Stream = () => {
     
     // Clear stream data
     if (channelId) {
-      localStorage.removeItem(`live_stream_${channelId}`);
+      // localStorage.removeItem(`live_stream_${channelId}`);
     }
   };
 
@@ -329,7 +329,7 @@ const Stream = () => {
         .eq('id', channelId);
 
       // Clear stream data
-      localStorage.removeItem(`live_stream_${channelId}`);
+      // localStorage.removeItem(`live_stream_${channelId}`);
 
       setIsStreaming(false);
       setCurrentStreamId(null);
